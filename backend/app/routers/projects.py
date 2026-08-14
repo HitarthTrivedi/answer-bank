@@ -1,0 +1,396 @@
+import asyncio
+import base64
+import logging
+import re
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from ..config import DATA_DIR, get_settings
+from ..db import SessionLocal, get_db
+from ..models import Answer, AnswerAsset, Project, Question, User
+from ..security import audit, client_ip, current_user
+from ..services import cache, diagrams, export, extractor, ingest, solver, verify
+from ..services.queue import quota_used, wake
+
+log = logging.getLogger("answerbank.projects")
+router = APIRouter(prefix="/api", tags=["projects"])
+
+# ---------------------------------------------------------------- helpers
+
+
+def _own_project(db: Session, user: User, project_id: str) -> Project:
+    project = db.get(Project, project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(404, "Project not found")
+    return project
+
+
+def _own_question(db: Session, user: User, question_id: str) -> Question:
+    q = db.get(Question, question_id)
+    if q is None or q.project.user_id != user.id:
+        raise HTTPException(404, "Question not found")
+    return q
+
+
+def _own_answer(db: Session, user: User, answer_id: str) -> Answer:
+    a = db.get(Answer, answer_id)
+    if a is None or a.question.project.user_id != user.id:
+        raise HTTPException(404, "Answer not found")
+    return a
+
+
+def _question_dict(q: Question) -> dict:
+    d = {
+        "id": q.id, "idx": q.idx, "text": q.text, "marks": q.marks,
+        "status": q.status, "qtype": q.qtype, "route_reason": q.route_reason,
+        "error": q.error, "assist_prompt": q.assist_prompt if q.status == "assist_waiting" else "",
+        "answer": None,
+    }
+    if q.answer is not None:
+        d["answer"] = {
+            "id": q.answer.id, "content_md": q.answer.content_md, "engine": q.answer.engine,
+            "provider": q.answer.provider, "model": q.answer.model,
+            "verified": q.answer.verified, "verify_note": q.answer.verify_note,
+            "explain_md": q.answer.explain_md,
+        }
+    return d
+
+
+def _project_dict(p: Project, with_questions: bool = False) -> dict:
+    counts: dict[str, int] = {}
+    for q in p.questions:
+        counts[q.status] = counts.get(q.status, 0) + 1
+    d = {
+        "id": p.id, "title": p.title, "status": p.status, "error": p.error,
+        "source_filename": p.source_filename, "created_at": p.created_at.isoformat(),
+        "total": len(p.questions), "counts": counts,
+    }
+    if with_questions:
+        d["questions"] = [_question_dict(q) for q in p.questions]
+    return d
+
+
+# ---------------------------------------------------------------- create + extract
+
+
+@router.post("/projects")
+async def create_project(
+    request: Request,
+    title: str = Form(min_length=1, max_length=200),
+    text: str = Form(default=""),
+    file: UploadFile | None = File(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    if file is None and not text.strip():
+        raise HTTPException(400, "Provide a file or pasted text")
+
+    raw_text, source_name = text, "pasted text"
+    if file is not None:
+        data = await file.read()
+        safe_name = re.sub(r"[^\w.\- ]", "_", file.filename or "upload")[:120]
+        kind = ingest.validate_upload(data, safe_name)
+        (DATA_DIR / "uploads" / f"{uuid.uuid4().hex}.{kind}").write_bytes(data)  # retained for re-extraction/debug
+        raw_text = ingest.extract_text(data, kind)
+        source_name = safe_name
+
+    if len(raw_text.strip()) < 12:
+        raise HTTPException(422, "No usable text found in the source")
+
+    project = Project(user_id=user.id, title=title.strip(), status="extracting",
+                      source_filename=source_name, raw_text=raw_text[:500_000])
+    db.add(project)
+    db.commit()
+    audit(db, "project_created", user.id, detail=f"{project.id} ({source_name})", ip=client_ip(request))
+
+    asyncio.create_task(_run_extraction(project.id))
+    return _project_dict(project)
+
+
+async def _run_extraction(project_id: str) -> None:
+    db = SessionLocal()
+    try:
+        project = db.get(Project, project_id)
+        if project is None:
+            return
+        try:
+            found = await extractor.extract_questions(project.raw_text)
+            if not found:
+                project.status = "error"
+                project.error = ("No questions detected. Number them like '1.' / 'Q2)' "
+                                 "or edit the text and try again.")
+            else:
+                for i, q in enumerate(found[:200]):  # sanity cap per project
+                    db.add(Question(project_id=project.id, idx=i, text=q["text"][:4000], marks=q["marks"]))
+                project.status = "review"
+        except Exception as e:
+            log.exception("extraction failed for %s", project_id)
+            project.status = "error"
+            project.error = f"Extraction failed: {e}"
+        db.commit()
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------- read / edit / delete
+
+
+@router.get("/projects")
+def list_projects(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    projects = (db.query(Project).filter_by(user_id=user.id)
+                .order_by(Project.created_at.desc()).all())
+    return [_project_dict(p) for p in projects]
+
+
+@router.get("/projects/{project_id}")
+def get_project(project_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return _project_dict(_own_project(db, user, project_id), with_questions=True)
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    project = _own_project(db, user, project_id)
+    db.delete(project)
+    db.commit()
+    audit(db, "project_deleted", user.id, detail=project_id)
+    return {"ok": True}
+
+
+class QuestionEdit(BaseModel):
+    text: str = Field(min_length=5, max_length=4000)
+    marks: int | None = Field(default=None, ge=1, le=100)
+
+
+class QuestionsUpdate(BaseModel):
+    questions: list[QuestionEdit] = Field(min_length=1, max_length=200)
+
+
+@router.put("/projects/{project_id}/questions")
+def update_questions(project_id: str, body: QuestionsUpdate,
+                     user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Replace the extracted question list after student review (pre-processing only)."""
+    project = _own_project(db, user, project_id)
+    if project.status not in ("review", "error"):
+        raise HTTPException(409, "Questions can only be edited before processing starts")
+    for q in list(project.questions):
+        db.delete(q)
+    db.flush()
+    for i, q in enumerate(body.questions):
+        db.add(Question(project_id=project.id, idx=i, text=q.text.strip(), marks=q.marks))
+    project.status = "review"
+    project.error = ""
+    db.commit()
+    return _project_dict(project, with_questions=True)
+
+
+# ---------------------------------------------------------------- processing
+
+
+@router.post("/projects/{project_id}/start")
+def start_processing(project_id: str, request: Request,
+                     user: User = Depends(current_user), db: Session = Depends(get_db)):
+    project = _own_project(db, user, project_id)
+    if project.status not in ("review", "done"):
+        raise HTTPException(409, f"Cannot start from status '{project.status}'")
+    pending = [q for q in project.questions if q.status == "pending"]
+    if not pending:
+        raise HTTPException(409, "No pending questions to process")
+
+    s = get_settings()
+    remaining = s.daily_question_quota - quota_used(db, user.id)
+    if len(pending) > remaining:
+        raise HTTPException(
+            429,
+            f"Daily quota: {remaining} of {s.daily_question_quota} questions left today, "
+            f"but this run needs {len(pending)}. Split the bank or continue tomorrow.",
+        )
+
+    project.status = "processing"
+    db.commit()
+    audit(db, "processing_started", user.id, detail=f"{project.id} ({len(pending)} q)", ip=client_ip(request))
+    wake()
+    return _project_dict(project)
+
+
+@router.post("/questions/{question_id}/regenerate")
+def regenerate(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    q = _own_question(db, user, question_id)
+    s = get_settings()
+    if quota_used(db, user.id) >= s.daily_question_quota:
+        raise HTTPException(429, "Daily question quota exhausted")
+    if q.answer is not None:
+        db.delete(q.answer)
+    # drop the cache entry so regenerate produces a fresh answer, not the cached one
+    ch = cache.qhash(q.text, q.marks, q.qtype) if q.qtype else None
+    if ch:
+        from ..models import AnswerCache
+        db.query(AnswerCache).filter_by(qhash=ch).delete()
+    q.status = "pending"
+    q.assist_prompt = ""
+    q.error = ""
+    q.project.status = "processing"
+    db.commit()
+    wake()
+    return {"ok": True}
+
+
+class AnswerEdit(BaseModel):
+    content_md: str = Field(min_length=1, max_length=60_000)
+
+
+@router.put("/answers/{answer_id}")
+def edit_answer(answer_id: str, body: AnswerEdit,
+                user: User = Depends(current_user), db: Session = Depends(get_db)):
+    a = _own_answer(db, user, answer_id)
+    a.content_md = body.content_md
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- assist mode
+
+
+class AssistSubmit(BaseModel):
+    content_md: str = Field(min_length=10, max_length=60_000)
+
+
+@router.post("/questions/{question_id}/assist")
+def submit_assist(question_id: str, body: AssistSubmit,
+                  user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Paste-back from the student's own ChatGPT/Claude tab."""
+    q = _own_question(db, user, question_id)
+    if q.status != "assist_waiting":
+        raise HTTPException(409, "This question is not waiting for an assist answer")
+
+    verified, note = (None, "")
+    if q.qtype == "numerical":
+        verified, note = verify.check_numerical(body.content_md)
+
+    if q.answer is not None:
+        db.delete(q.answer)
+        db.flush()
+    db.add(Answer(question_id=q.id, content_md=body.content_md.strip(), engine="assist",
+                  provider="assist", model="student-supplied", verified=verified, verify_note=note))
+    q.status = "answered"
+    q.assist_prompt = ""
+    db.commit()
+    db.refresh(q)  # reload the answer relationship so the response carries it
+    cache.store(db, q.text, q.marks, q.qtype or "theory", content_md=body.content_md.strip(),
+                provider="assist", model="student-supplied", verified=verified)
+    wake()  # let the worker flip the project to done if this was the last one
+    return _question_dict(q)
+
+
+# ---------------------------------------------------------------- explain-me
+
+
+@router.post("/questions/{question_id}/explain")
+async def explain_me(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    q = _own_question(db, user, question_id)
+    if q.answer is None:
+        raise HTTPException(409, "Answer this question first")
+    if q.answer.explain_md:
+        return {"explain_md": q.answer.explain_md, "assist_prompt": ""}
+    try:
+        text = await solver.explain(q.text, q.answer.content_md)
+        q.answer.explain_md = text
+        db.commit()
+        return {"explain_md": text, "assist_prompt": ""}
+    except solver.NoProviderError:
+        # zero-key path: hand back a crafted prompt for the student's own AI tab
+        return {"explain_md": "", "assist_prompt": solver.build_explain_assist_prompt(q.text, q.answer.content_md)}
+
+
+class ExplainSubmit(BaseModel):
+    explain_md: str = Field(min_length=10, max_length=30_000)
+
+
+@router.post("/questions/{question_id}/explain/assist")
+def submit_explain(question_id: str, body: ExplainSubmit,
+                   user: User = Depends(current_user), db: Session = Depends(get_db)):
+    q = _own_question(db, user, question_id)
+    if q.answer is None:
+        raise HTTPException(409, "Answer this question first")
+    q.answer.explain_md = body.explain_md.strip()
+    db.commit()
+    return {"explain_md": q.answer.explain_md}
+
+
+# ---------------------------------------------------------------- assets (rendered figures)
+
+
+class AssetIn(BaseModel):
+    kind: str = Field(pattern="^(mermaid)$")
+    key: str = Field(min_length=8, max_length=64, pattern="^[a-f0-9]+$")
+    png_base64: str = Field(max_length=3_000_000)  # ~2MB binary
+
+
+@router.post("/answers/{answer_id}/assets")
+def upload_asset(answer_id: str, body: AssetIn,
+                 user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Client-rendered mermaid PNG, stored so the DOCX export can embed the figure."""
+    a = _own_answer(db, user, answer_id)
+    try:
+        png = base64.b64decode(body.png_base64, validate=True)
+    except Exception:
+        raise HTTPException(400, "Invalid base64")
+    if not png.startswith(b"\x89PNG"):
+        raise HTTPException(400, "Asset must be a PNG")
+
+    existing = db.query(AnswerAsset).filter_by(answer_id=a.id, kind=body.kind, key=body.key).first()
+    if existing:
+        return {"ok": True}
+    path = DATA_DIR / "assets" / f"{a.id}_{body.kind}_{body.key}.png"
+    path.write_bytes(png)
+    db.add(AnswerAsset(answer_id=a.id, kind=body.kind, key=body.key, path=str(path)))
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/answers/{answer_id}/graph/{key}.png")
+def graph_png(answer_id: str, key: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Server-rendered graphspec plot. Rendered once, cached on disk as an asset."""
+    a = _own_answer(db, user, answer_id)
+    if not re.fullmatch(r"[a-f0-9]{8,64}", key):
+        raise HTTPException(400, "Bad key")
+
+    existing = db.query(AnswerAsset).filter_by(answer_id=a.id, kind="graph", key=key).first()
+    if existing and Path(existing.path).exists():
+        return Response(Path(existing.path).read_bytes(), media_type="image/png")
+
+    for m in diagrams.GRAPHSPEC_FENCE.finditer(a.content_md):
+        spec_text = m.group(1)
+        if diagrams.spec_key(spec_text) == key:
+            png = diagrams.render_graphspec(spec_text)
+            if png is None:
+                raise HTTPException(422, "Graph spec could not be rendered")
+            path = DATA_DIR / "assets" / f"{a.id}_graph_{key}.png"
+            path.write_bytes(png)
+            if not existing:
+                db.add(AnswerAsset(answer_id=a.id, kind="graph", key=key, path=str(path)))
+                db.commit()
+            return Response(png, media_type="image/png")
+    raise HTTPException(404, "No graphspec with this key in the answer")
+
+
+# ---------------------------------------------------------------- export
+
+
+@router.get("/projects/{project_id}/export")
+def export_docx(project_id: str, request: Request,
+                user: User = Depends(current_user), db: Session = Depends(get_db)):
+    project = _own_project(db, user, project_id)
+    if not any(q.answer is not None for q in project.questions):
+        raise HTTPException(409, "Nothing answered yet — nothing to export")
+    data = export.build_docx(project, db)
+    audit(db, "export_docx", user.id, detail=project_id, ip=client_ip(request))
+    safe_title = re.sub(r"[^\w\- ]", "", project.title)[:60].strip() or "answers"
+    return Response(
+        data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}.docx"'},
+    )

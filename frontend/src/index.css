@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+@import 'katex/dist/katex.min.css';
+@import 'highlight.js/styles/github-dark.css';
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-slate-950 text-slate-100 antialiased;
+}
+
+/* rendered answer markdown */
+.answer-md {
+  @apply text-[15px] leading-relaxed text-slate-200;
+}
+.answer-md h1, .answer-md h2, .answer-md h3 {
+  @apply mt-4 mb-2 font-semibold text-slate-100;
+}
+.answer-md h1 { @apply text-lg; }
+.answer-md h2 { @apply text-base; }
+.answer-md p { @apply my-2; }
+.answer-md ul { @apply my-2 list-disc pl-6 space-y-1; }
+.answer-md ol { @apply my-2 list-decimal pl-6 space-y-1; }
+.answer-md code:not(pre code) {
+  @apply rounded bg-slate-800 px-1.5 py-0.5 text-[13px] text-amber-300;
+}
+.answer-md pre {
+  @apply my-3 overflow-x-auto rounded-lg border border-slate-800 bg-[#0d1117] p-3 text-[13px];
+}
+.answer-md table { @apply my-3 w-full border-collapse text-sm; }
+.answer-md th, .answer-md td { @apply border border-slate-700 px-3 py-1.5 text-left; }
+.answer-md th { @apply bg-slate-800/60 font-medium; }
+.answer-md blockquote { @apply my-2 border-l-2 border-indigo-500 pl-3 text-slate-400; }
+.answer-md .katex-display { @apply my-3 overflow-x-auto; }
+.answer-md strong { @apply text-slate-50; }
+.answer-md a { @apply text-indigo-400 underline; }
+.answer-md img, .answer-md svg { @apply max-w-full; }

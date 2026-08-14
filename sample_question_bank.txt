@@ -1,0 +1,13 @@
+Engineering Question Bank — Unit 2 (Demo)
+
+1. Define database normalization and explain 1NF, 2NF and 3NF with suitable examples. (10 marks)
+
+2. A car starts from rest and accelerates uniformly at 2 m/s^2. Calculate its velocity after 5 seconds. (2 marks)
+
+3. Write a program to reverse a singly linked list and explain its time complexity. (5 marks)
+
+4. Sketch the graph of e^x and e^-x on the same axes and explain their behaviour. (5 marks)
+
+5. Draw the architecture diagram of a three-tier web application and explain each tier. (10 marks)
+
+6. Compare TCP and UDP protocols with respect to reliability, ordering and speed. (5 marks)
