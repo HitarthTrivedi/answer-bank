@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import AnswerCard from '../components/AnswerCard'
+import ExtensionNeeded from '../components/ExtensionNeeded'
 import Paywall from '../components/Paywall'
 import ReviewQuestions from '../components/ReviewQuestions'
+import { isInstalled, onProgress, startRun, stopRun } from '../extension'
 
 export default function Project() {
   const { id } = useParams()
@@ -11,7 +13,9 @@ export default function Project() {
   const [project, setProject] = useState(null)
   const [error, setError] = useState('')
   const [paywall, setPaywall] = useState(null)
+  const [run, setRun] = useState(null)   // live state pushed by the extension
   const pollRef = useRef(null)
+  const hasExt = isInstalled()
 
   const load = useCallback(async () => {
     try {
@@ -35,6 +39,18 @@ export default function Project() {
     }, 2500)
     return () => clearInterval(pollRef.current)
   }, [load])
+
+  // the extension pushes progress straight to this page while it works
+  useEffect(() => onProgress(setRun), [])
+
+  const resume = async () => {
+    try { await startRun(id); setRun({ running: true, status: 'running', message: 'Starting…' }) }
+    catch (e) { alert(e.message) }
+  }
+
+  const halt = async () => {
+    try { await stopRun() } catch { /* already stopped */ }
+  }
 
   const exportDocx = async () => {
     try {
@@ -131,12 +147,49 @@ export default function Project() {
 
       {project.status === 'review' && <ReviewQuestions project={project} onStarted={load} />}
 
-      {project.engine_mode === 'extension' && needYou > 0 && (
-        <div className="mb-4 rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-4 text-sm text-indigo-200">
-          <span className="font-semibold">Extension mode:</span> {needYou} question
-          {needYou === 1 ? '' : 's'} waiting for your own AI. Open the AnswerBank extension
-          and hit <span className="font-medium">Start answering</span> — or answer any of them
-          by hand below.
+      {needYou > 0 && (
+        <div className="mb-4 rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-4">
+          {!hasExt ? (
+            <ExtensionNeeded />
+          ) : run?.running || run?.status === 'stopping' ? (
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm text-indigo-200">
+                  <span className="font-semibold">Answering in your browser…</span>{' '}
+                  {run.message}
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Each question gets a fresh chat. Leave this browser open.
+                </p>
+              </div>
+              <button
+                onClick={halt}
+                className="shrink-0 rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500"
+              >
+                Stop
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm text-indigo-200">
+                  <span className="font-semibold">{needYou} question{needYou === 1 ? '' : 's'} left.</span>{' '}
+                  {run?.status === 'error' ? run.message : 'Your AI answers these.'}
+                </p>
+                {run?.errors?.length > 0 && (
+                  <p className="mt-0.5 text-xs text-amber-400">
+                    {run.errors.length} skipped — you can paste those in by hand below.
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={resume}
+                className="shrink-0 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold hover:bg-indigo-500"
+              >
+                {run ? 'Resume' : 'Answer with my AI'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

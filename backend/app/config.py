@@ -1,4 +1,10 @@
-"""Central settings. Everything tunable lives in .env — no magic numbers in code."""
+"""Central settings. Everything tunable lives in .env — no magic numbers in code.
+
+Note what is NOT here: there are no AI provider keys. This server never calls a model.
+Every answer comes from the student's own browser AI via the Chrome extension; the only
+"intelligence" running server-side is deterministic (regex extraction, keyword routing,
+SymPy verification).
+"""
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -22,17 +28,7 @@ class Settings(BaseSettings):
     # --- uploads ---
     max_upload_mb: int = 15
     allowed_extensions: str = "pdf,docx,txt,md,png,jpg,jpeg"
-
-    # --- quotas / pacing ---
-    daily_question_quota: int = 60          # solved questions per user per day
-    provider_min_interval_s: float = 4.0    # global pacing between calls to the same provider (15 RPM ≈ 4s)
-    llm_timeout_s: float = 120.0
-
-    # --- providers (all optional; product still works key-less via Assist mode) ---
-    google_api_key: str = ""
-    groq_api_key: str = ""
-    openrouter_api_key: str = ""
-    mock_llm: bool = False                  # deterministic canned answers for dev/demo/tests
+    max_questions_per_bank: int = 200
 
     # --- features ---
     class_cache: bool = True                # share answers for identical questions across users
@@ -48,10 +44,9 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
     mock_payments: bool = True              # orders self-complete; no gateway needed for dev/demo
-    payment_callback_url: str = "http://localhost:5173/app/billing"
+    payment_callback_url: str = "http://localhost:5173/app"
 
     # --- chrome extension ---
-    pairing_code_ttl_s: int = 300           # how long a pairing code stays claimable
     extension_origin_regex: str = r"chrome-extension://[a-z]{32}"
 
     model_config = {"env_file": str(BASE_DIR / ".env"), "env_file_encoding": "utf-8"}
@@ -71,18 +66,10 @@ def get_settings() -> Settings:
 
 
 @lru_cache
-def get_model_config() -> dict:
-    """Role→model mapping. Edit backend/models.json — never hardcode model strings in code."""
-    path = BASE_DIR / "models.json"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-@lru_cache
 def get_extension_config() -> dict:
-    """DOM selectors the Chrome extension uses to drive chatgpt.com / claude.ai / gemini.
-    Served to the extension at runtime so a UI change on their side is a one-file server
-    fix, not a re-install for every student."""
+    """Selectors + question-type→site routing for the Chrome extension. Served at runtime
+    so a UI change on ChatGPT's side is a one-file server fix, not a re-install for every
+    student. Edit backend/extension_selectors.json."""
     path = BASE_DIR / "extension_selectors.json"
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)

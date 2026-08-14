@@ -4,11 +4,9 @@
 // question. That second part is not an implementation detail — it IS the product. Forty
 // questions pasted into one thread is precisely the failure AnswerBank exists to fix, so
 // we navigate to a new chat before every single prompt even though it costs a few seconds.
-
-const DEFAULTS = {
-  apiBase: 'http://localhost:8000',
-  sites: { chatgpt: true, claude: true, gemini: true },
-}
+//
+// The session arrives from the app's own page via content/bridge.js, so there is nothing
+// to pair and nothing to log into twice.
 
 const state = {
   running: false,
@@ -20,22 +18,25 @@ const state = {
   status: 'idle',
   message: '',
   errors: [],
+  sitesUsed: [],
 }
 
-// ---------------------------------------------------------------- storage
+let session = null  // {apiBase, access, refresh} — pushed by the app page
+let appTabId = null // the AnswerBank tab that started the run, so progress goes back to it
 
-const store = {
-  async get(keys) { return chrome.storage.local.get(keys) },
-  async set(obj) { return chrome.storage.local.set(obj) },
-}
+// ---------------------------------------------------------------- plumbing
 
-async function settings() {
-  const s = await store.get(['apiBase', 'sites'])
-  return { ...DEFAULTS, ...s, sites: { ...DEFAULTS.sites, ...(s.sites || {}) } }
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function broadcast() {
+  // the popup is an extension page, so runtime.sendMessage reaches it...
   chrome.runtime.sendMessage({ type: 'AB_STATE', state }).catch(() => { /* popup closed */ })
+  // ...but a content script is NOT a runtime message target, so the app's bridge has to
+  // be addressed by tab.
+  if (appTabId !== null) {
+    chrome.tabs.sendMessage(appTabId, { type: 'AB_STATE', state })
+      .catch(() => { appTabId = null })  // tab closed or navigated away
+  }
 }
 
 function setStatus(status, message = '') {
@@ -44,22 +45,16 @@ function setStatus(status, message = '') {
   broadcast()
 }
 
-// ---------------------------------------------------------------- API
-
 async function apiFetch(path, opts = {}, retry = true) {
-  const { apiBase } = await settings()
-  const { access_token } = await store.get(['access_token'])
-  const headers = { ...(opts.headers || {}) }
-  if (access_token) headers.Authorization = `Bearer ${access_token}`
+  if (!session) throw new Error('not_connected')
+  const headers = { ...(opts.headers || {}), Authorization: `Bearer ${session.access}` }
   if (opts.body !== undefined && typeof opts.body !== 'string') {
     headers['Content-Type'] = 'application/json'
     opts = { ...opts, body: JSON.stringify(opts.body) }
   }
 
-  const res = await fetch(`${apiBase}/api${path}`, { ...opts, headers })
-  if (res.status === 401 && retry && (await refreshSession())) {
-    return apiFetch(path, opts, false)
-  }
+  const res = await fetch(`${session.apiBase}/api${path}`, { ...opts, headers })
+  if (res.status === 401 && retry && (await refreshSession())) return apiFetch(path, opts, false)
   if (!res.ok) {
     let detail = res.statusText
     try { detail = (await res.json()).detail ?? detail } catch { /* not json */ }
@@ -71,25 +66,22 @@ async function apiFetch(path, opts = {}, retry = true) {
 }
 
 async function refreshSession() {
-  const { apiBase } = await settings()
-  const { refresh_token } = await store.get(['refresh_token'])
-  if (!refresh_token) return false
+  if (!session || !session.refresh) return false
   try {
-    const res = await fetch(`${apiBase}/api/auth/refresh`, {
+    const res = await fetch(`${session.apiBase}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token }),
+      body: JSON.stringify({ refresh_token: session.refresh }),
     })
     if (!res.ok) return false
     const data = await res.json()
-    await store.set({ access_token: data.access_token, refresh_token: data.refresh_token })
+    session.access = data.access_token
+    session.refresh = data.refresh_token
     return true
   } catch { return false }
 }
 
 // ---------------------------------------------------------------- tabs
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function tell(tabId, msg) {
   return new Promise((resolve) => {
@@ -114,25 +106,28 @@ async function freshChatTab(site) {
   if (!tab) tab = await chrome.tabs.create({ url: site.url, active: false })
   else await chrome.tabs.update(tab.id, { url: site.url })
 
-  // wait for load, then for the driver to answer, then for the composer to mount
   for (let i = 0; i < 60; i++) {
     await sleep(500)
     let info
     try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
     if (info.status !== 'complete') continue
     const ping = await tell(tab.id, { type: 'AB_PING', site })
-    if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.label}`)
+    if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
     if (ping.ok && ping.hasComposer) return tab
   }
-  throw new Error(`composer_never_appeared:${site.label}`)
+  throw new Error(`composer_never_appeared:${site.key}`)
 }
 
 // ---------------------------------------------------------------- the run loop
 
-function chooseSite(cfg, preferred, enabled) {
+/** Lazily learned during a run: sites the student turns out not to be signed into.
+ *  No settings screen, no checkboxes — we find out by trying. */
+const unavailable = new Set()
+
+function chooseSite(cfg, preferred) {
   const order = [preferred, ...Object.keys(cfg.sites)]
   for (const key of order) {
-    if (cfg.sites[key] && enabled[key]) return { key, ...cfg.sites[key] }
+    if (cfg.sites[key] && !unavailable.has(key)) return { key, ...cfg.sites[key] }
   }
   return null
 }
@@ -148,12 +143,11 @@ async function waitForAnswer(tabId, cfg, site) {
 
     const p = await tell(tabId, { type: 'AB_PROBE', site })
     if (!p.ok) continue
-
     if (p.generating) { stable = 0; lastLen = p.length; continue }
     if (p.turns <= p.baseline || p.length === 0) continue
 
-    // no stop-button AND the text stopped growing for two polls — it's finished.
-    // Length-stability is the real signal; the stop button is just an accelerator,
+    // No stop-button AND the text stopped growing for two polls — it's finished.
+    // Length-stability is the real signal; the stop button is only an accelerator,
     // because it's the selector most likely to be stale.
     if (p.length === lastLen) {
       if (++stable >= 2) {
@@ -171,7 +165,8 @@ async function waitForAnswer(tabId, cfg, site) {
 
 async function runLoop() {
   const cfg = await apiFetch('/extension/config')
-  const { sites: enabled } = await settings()
+  unavailable.clear()
+  state.sitesUsed = []
 
   while (state.running && !state.stopRequested) {
     const work = await apiFetch(`/extension/work?project_id=${encodeURIComponent(state.projectId)}`)
@@ -181,10 +176,13 @@ async function runLoop() {
     state.done = work.total - work.waiting
     state.projectTitle = work.project_title
 
-    const site = chooseSite(cfg, work.preferred_site, enabled)
-    if (!site) throw new Error('No AI sites enabled — turn one on in the extension settings')
+    const site = chooseSite(cfg, work.preferred_site)
+    if (!site) {
+      throw new Error("You're not signed in to ChatGPT, Claude or Gemini in this browser. " +
+                      'Sign in to any one of them and press Start again.')
+    }
 
-    setStatus('running', `Q${work.idx}/${work.total} → ${site.label}`)
+    setStatus('running', `Question ${work.idx} of ${work.total} → ${site.label}`)
 
     try {
       const tab = await freshChatTab(site)
@@ -198,15 +196,24 @@ async function runLoop() {
         method: 'POST', body: { content_md: markdown },
       })
       state.done += 1
+      if (!state.sitesUsed.includes(site.label)) state.sitesUsed.push(site.label)
       broadcast()
     } catch (e) {
       const msg = String(e.message || e)
       if (msg === 'stopped') break
+
+      // Not signed in to this one? Stop trying it and let the next question pick another.
+      if (msg.startsWith('not_signed_in:')) {
+        unavailable.add(msg.split(':')[1])
+        setStatus('running', `Not signed in to ${site.label} — trying another`)
+        continue
+      }
+
       state.errors.push({ q: work.idx, error: msg })
-      setStatus('running', `Q${work.idx} failed: ${msg} — skipping`)
-      // a failed question stays assist_waiting, so it's still visible in the web app
-      // for a manual paste. We move on rather than blocking the whole run on one bad DOM.
-      if (state.errors.length >= 5) throw new Error('too_many_failures')
+      setStatus('running', `Question ${work.idx} failed — skipping`)
+      // A failed question stays assist_waiting, so it's still visible in the app for a
+      // manual paste. We move on rather than blocking a whole run on one bad DOM.
+      if (state.errors.length >= 5) throw new Error('Too many questions failed in a row.')
       await sleep(1500)
     }
   }
@@ -216,7 +223,7 @@ async function start(projectId) {
   if (state.running) return
   Object.assign(state, {
     running: true, stopRequested: false, projectId,
-    done: 0, total: 0, errors: [], status: 'running', message: 'Starting…',
+    done: 0, total: 0, errors: [], sitesUsed: [], status: 'running', message: 'Starting…',
   })
   broadcast()
   try {
@@ -230,61 +237,28 @@ async function start(projectId) {
   }
 }
 
-// ---------------------------------------------------------------- popup messages
+// ---------------------------------------------------------------- messages
 
-chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   ;(async () => {
     try {
       switch (msg.type) {
-        case 'AB_GET_STATE': {
-          const { access_token, user } = await store.get(['access_token', 'user'])
-          respond({ ok: true, state, connected: !!access_token, user: user || null,
-                    settings: await settings() })
+        case 'AB_PING':
+          respond({ ok: true, version: chrome.runtime.getManifest().version })
           break
-        }
-        case 'AB_PAIR': {
-          const { apiBase } = await settings()
-          const res = await fetch(`${apiBase}/api/extension/claim`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: msg.code.trim().toUpperCase() }),
-          })
-          if (!res.ok) {
-            let detail = 'Pairing failed'
-            try { detail = (await res.json()).detail || detail } catch { /* ignore */ }
-            respond({ ok: false, error: detail })
-            break
-          }
-          const data = await res.json()
-          await store.set({
-            access_token: data.access_token,
-            refresh_token: data.refresh_token,
-            user: data.user,
-          })
-          respond({ ok: true, user: data.user })
-          break
-        }
-        case 'AB_DISCONNECT':
-          await chrome.storage.local.remove(['access_token', 'refresh_token', 'user'])
-          respond({ ok: true })
-          break
-        case 'AB_PROJECTS':
-          respond({ ok: true, projects: await apiFetch('/extension/projects') })
-          break
-        case 'AB_BALANCE':
-          respond({ ok: true, balance: await apiFetch('/billing/me') })
+        case 'AB_STATUS':
+          respond({ ok: true, state, connected: !!session })
           break
         case 'AB_START':
+          // the page hands over its own session — same origin, nothing to pair
+          session = { apiBase: (msg.apiBase || '').replace(/\/$/, ''), access: msg.access, refresh: msg.refresh }
+          if (sender.tab) appTabId = sender.tab.id  // send progress back to this tab
           start(msg.projectId)
           respond({ ok: true })
           break
         case 'AB_STOP':
           state.stopRequested = true
           setStatus('stopping', 'Finishing the current question…')
-          respond({ ok: true })
-          break
-        case 'AB_SAVE_SETTINGS':
-          await store.set({ apiBase: msg.apiBase, sites: msg.sites })
           respond({ ok: true })
           break
         default:

@@ -48,8 +48,6 @@ class Project(Base):
     source_filename: Mapped[str] = mapped_column(String(255), default="")
     raw_text: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
-    # who answers: "auto" = server API chain, "extension" = student's own browser AI tabs
-    engine_mode: Mapped[str] = mapped_column(String(20), default="auto")
     # export paywall — unlocking is per question bank, so re-downloads are always free
     unlocked: Mapped[bool] = mapped_column(Boolean, default=False)
     unlock_reason: Mapped[str] = mapped_column(String(20), default="")  # free | credit | grant
@@ -165,17 +163,6 @@ class Order(Base):
     pay_url: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class PairingCode(Base):
-    """Short-lived code shown in the web app and typed into the Chrome extension, so the
-    extension never handles the account password."""
-    __tablename__ = "pairing_codes"
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    code_hash: Mapped[str] = mapped_column(String(64), index=True)  # sha256 — the code itself is never stored
-    expires_at: Mapped[datetime] = mapped_column(DateTime)
-    used: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class AuditLog(Base):

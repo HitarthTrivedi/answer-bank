@@ -14,7 +14,7 @@ from ..db import SessionLocal, get_db
 from ..models import Answer, AnswerAsset, Project, Question, User
 from ..security import audit, client_ip, current_user
 from ..services import billing, cache, diagrams, export, extractor, ingest, solver, verify
-from ..services.queue import quota_used, wake
+from ..services.queue import wake
 
 log = logging.getLogger("answerbank.projects")
 router = APIRouter(prefix="/api", tags=["projects"])
@@ -67,8 +67,7 @@ def _project_dict(p: Project, with_questions: bool = False) -> dict:
     d = {
         "id": p.id, "title": p.title, "status": p.status, "error": p.error,
         "source_filename": p.source_filename, "created_at": p.created_at.isoformat(),
-        "total": len(p.questions), "counts": counts,
-        "engine_mode": p.engine_mode, "unlocked": p.unlocked,
+        "total": len(p.questions), "counts": counts, "unlocked": p.unlocked,
     }
     if with_questions:
         d["questions"] = [_question_dict(q) for q in p.questions]
@@ -119,13 +118,13 @@ async def _run_extraction(project_id: str) -> None:
         if project is None:
             return
         try:
-            found = await extractor.extract_questions(project.raw_text)
+            found = extractor.extract_questions(project.raw_text)
             if not found:
                 project.status = "error"
                 project.error = ("No questions detected. Number them like '1.' / 'Q2)' "
                                  "or edit the text and try again.")
             else:
-                for i, q in enumerate(found[:200]):  # sanity cap per project
+                for i, q in enumerate(found[:get_settings().max_questions_per_bank]):
                     db.add(Question(project_id=project.id, idx=i, text=q["text"][:4000], marks=q["marks"]))
                 project.status = "review"
         except Exception as e:
@@ -191,12 +190,8 @@ def update_questions(project_id: str, body: QuestionsUpdate,
 # ---------------------------------------------------------------- processing
 
 
-class StartIn(BaseModel):
-    engine_mode: str = Field(default="auto", pattern="^(auto|extension)$")
-
-
 @router.post("/projects/{project_id}/start")
-def start_processing(project_id: str, request: Request, body: StartIn | None = None,
+def start_processing(project_id: str, request: Request,
                      user: User = Depends(current_user), db: Session = Depends(get_db)):
     project = _own_project(db, user, project_id)
     if project.status not in ("review", "done"):
@@ -205,23 +200,10 @@ def start_processing(project_id: str, request: Request, body: StartIn | None = N
     if not pending:
         raise HTTPException(409, "No pending questions to process")
 
-    project.engine_mode = body.engine_mode if body else "auto"
-
-    # extension mode spends the student's own AI, not our provider quota — so it isn't capped
-    if project.engine_mode == "auto":
-        s = get_settings()
-        remaining = s.daily_question_quota - quota_used(db, user.id)
-        if len(pending) > remaining:
-            raise HTTPException(
-                429,
-                f"Daily quota: {remaining} of {s.daily_question_quota} questions left today, "
-                f"but this run needs {len(pending)}. Split the bank or continue tomorrow.",
-            )
-
     project.status = "processing"
     db.commit()
     audit(db, "processing_started", user.id,
-          detail=f"{project.id} ({len(pending)} q, {project.engine_mode})", ip=client_ip(request))
+          detail=f"{project.id} ({len(pending)} q)", ip=client_ip(request))
     wake()
     return _project_dict(project)
 
@@ -229,9 +211,6 @@ def start_processing(project_id: str, request: Request, body: StartIn | None = N
 @router.post("/questions/{question_id}/regenerate")
 def regenerate(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     q = _own_question(db, user, question_id)
-    s = get_settings()
-    if quota_used(db, user.id) >= s.daily_question_quota:
-        raise HTTPException(429, "Daily question quota exhausted")
     if q.answer is not None:
         db.delete(q.answer)
     # drop the cache entry so regenerate produces a fresh answer, not the cached one
@@ -299,20 +278,16 @@ def submit_assist(question_id: str, body: AssistSubmit,
 
 
 @router.post("/questions/{question_id}/explain")
-async def explain_me(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def explain_me(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Explains go the same way answers do — through the student's own AI. Cached on the
+    answer once produced, so a second click is instant and free."""
     q = _own_question(db, user, question_id)
     if q.answer is None:
         raise HTTPException(409, "Answer this question first")
     if q.answer.explain_md:
         return {"explain_md": q.answer.explain_md, "assist_prompt": ""}
-    try:
-        text = await solver.explain(q.text, q.answer.content_md)
-        q.answer.explain_md = text
-        db.commit()
-        return {"explain_md": text, "assist_prompt": ""}
-    except solver.NoProviderError:
-        # zero-key path: hand back a crafted prompt for the student's own AI tab
-        return {"explain_md": "", "assist_prompt": solver.build_explain_assist_prompt(q.text, q.answer.content_md)}
+    return {"explain_md": "",
+            "assist_prompt": solver.build_explain_assist_prompt(q.text, q.answer.content_md)}
 
 
 class ExplainSubmit(BaseModel):

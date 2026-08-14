@@ -1,19 +1,15 @@
-"""Per-type answer generation. One question in, one polished markdown answer out.
+"""Prompt construction. One question in, one prompt out — this module calls nothing.
+
+Every answer in AnswerBank comes from the student's own browser AI, so the prompt IS the
+product: it is the only lever we have over answer quality. The extension pastes it into
+a fresh chat, and a student pasting it by hand gets a byte-identical result.
 
 Design decisions that matter:
 - The question text is wrapped in <question> tags and explicitly declared DATA, not
   instructions — uploaded files are untrusted input (prompt-injection surface).
 - Graphs/diagrams come back as *specs* (graphspec JSON / mermaid), never as executable
   code. The server renders specs with matplotlib/sympy under an expression allowlist.
-- The same prompt powers API mode and Assist mode, so a pasted ChatGPT answer renders
-  identically to an API answer.
 """
-from ..config import get_model_config
-from . import providers, verify
-
-
-class NoProviderError(Exception):
-    """No usable API chain for this type — question should go to Assist mode."""
 
 
 def _depth(marks: int | None) -> str:
@@ -94,36 +90,6 @@ def build_assist_prompt(text: str, qtype: str, marks: int | None) -> str:
     return msgs[0]["content"] + "\n\n" + msgs[1]["content"]
 
 
-async def solve(text: str, qtype: str, marks: int | None) -> dict:
-    """Try the configured chain for this type. Returns the answer dict or raises NoProviderError."""
-    chain = get_model_config()["solvers"].get(qtype) or get_model_config()["solvers"]["theory"]
-    usable = [c for c in chain if providers.provider_available(c["provider"])]
-    if not usable:
-        raise NoProviderError(qtype)
-
-    last_err: Exception | None = None
-    for cand in usable:
-        try:
-            content = await providers.chat(
-                cand["provider"], cand["model"], build_solver_messages(text, qtype, marks)
-            )
-            result = {
-                "content_md": content.strip(),
-                "provider": cand["provider"],
-                "model": cand["model"],
-                "verified": None,
-                "verify_note": "",
-            }
-            if qtype == "numerical":
-                verified, note = verify.check_numerical(content)
-                result["verified"], result["verify_note"] = verified, note
-            return result
-        except providers.LLMError as e:
-            last_err = e
-            continue
-    raise NoProviderError(f"{qtype}: all providers failed ({last_err})")
-
-
 _EXPLAIN_SYS = (
     "TASK: explain_newbie\n"
     "You re-explain an exam answer to a complete beginner. Assume they missed every lecture. "
@@ -146,10 +112,3 @@ def build_explain_messages(question: str, answer_md: str) -> list[dict]:
 def build_explain_assist_prompt(question: str, answer_md: str) -> str:
     msgs = build_explain_messages(question, answer_md)
     return msgs[0]["content"] + "\n\n" + msgs[1]["content"]
-
-
-async def explain(question: str, answer_md: str) -> str:
-    cfg = get_model_config()["explain"]
-    if not providers.provider_available(cfg["provider"]):
-        raise NoProviderError("explain")
-    return (await providers.chat(cfg["provider"], cfg["model"], build_explain_messages(question, answer_md))).strip()

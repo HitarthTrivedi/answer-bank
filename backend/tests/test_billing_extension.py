@@ -6,6 +6,8 @@ Two things must hold no matter what the client says:
 """
 import pytest
 
+from helpers import answer_via_extension, wait_for
+
 # env + the shared `client` fixture live in conftest.py
 
 BANK = "1. Define normalization in DBMS. (5 marks)\n2. Calculate 12 * 4. (2 marks)\n"
@@ -20,20 +22,22 @@ def auth(client):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def _answered_project(client, auth, title, mode="auto", text=BANK):
-    """Upload a bank, run it to completion, return the project id."""
+def _started_project(client, auth, title, text=BANK):
+    """Upload a bank and start it. Questions end up parked for the browser."""
     r = client.post("/api/projects", data={"title": title, "text": text}, headers=auth)
     pid = r.json()["id"]
-    for _ in range(60):
-        p = client.get(f"/api/projects/{pid}", headers=auth).json()
-        if p["status"] in ("review", "error"):
-            break
+    p = wait_for(client, auth, pid, lambda p: p["status"] in ("review", "error"))
     assert p["status"] == "review", p
-    client.post(f"/api/projects/{pid}/start", json={"engine_mode": mode}, headers=auth)
-    for _ in range(120):
-        p = client.get(f"/api/projects/{pid}", headers=auth).json()
-        if p["status"] == "done" or p["counts"].get("assist_waiting"):
-            break
+    client.post(f"/api/projects/{pid}/start", headers=auth)
+    wait_for(client, auth, pid, lambda p: p["status"] == "done" or p["counts"].get("assist_waiting"))
+    return pid
+
+
+def _answered_project(client, auth, title, text=BANK):
+    """...and then let the stand-in extension answer them."""
+    pid = _started_project(client, auth, title, text)
+    answer_via_extension(client, auth, pid)
+    wait_for(client, auth, pid, lambda p: p["status"] == "done")
     return pid
 
 
@@ -99,12 +103,12 @@ EXT_BANK = ("1. Explain ACID properties with an example. (10 marks)\n"
             "2. Compute the median of 3, 9, 4, 7. (2 marks)\n")
 
 
-def test_extension_mode_parks_every_question_for_the_students_own_ai(client, auth):
-    pid = _answered_project(client, auth, "Extension Bank", mode="extension", text=EXT_BANK)
+def test_every_uncached_question_is_parked_for_the_students_own_ai(client, auth):
+    pid = _started_project(client, auth, "Extension Bank", text=EXT_BANK)
     p = client.get(f"/api/projects/{pid}", headers=auth).json()
-    # mock providers are available, yet nothing was answered by them
+    # the server answers nothing itself — every uncached question waits for the browser
     assert p["counts"].get("assist_waiting") == p["total"]
-    assert p["engine_mode"] == "extension"
+    assert p["counts"].get("answered") is None
 
     work = client.get(f"/api/extension/work?project_id={pid}", headers=auth).json()
     assert work["done"] is False
@@ -120,39 +124,19 @@ def test_extension_mode_parks_every_question_for_the_students_own_ai(client, aut
     assert after["question_id"] != work["question_id"]
 
 
-def test_cache_hits_skip_the_browser_even_in_extension_mode(client, auth):
-    """A question the class already answered costs nobody anything — not our API quota,
-    and not a trip through the student's browser. The cache outranks the engine mode."""
-    pid = _answered_project(client, auth, "Cached In Extension Mode", mode="extension")
+def test_cache_hits_skip_the_browser(client, auth):
+    """A question the class already answered costs nobody anything — and specifically
+    costs no trip through the student's browser. The cache outranks everything."""
+    pid = _started_project(client, auth, "Cached Bank")
     p = client.get(f"/api/projects/{pid}", headers=auth).json()
     assert p["counts"].get("answered") == p["total"]
     assert p["counts"].get("assist_waiting") is None
     assert all(q["answer"]["engine"] == "cache" for q in p["questions"])
 
 
-def test_pairing_code_is_single_use_and_never_leaks_the_password(client, auth):
-    code = client.post("/api/extension/pair", headers=auth).json()["code"]
-    assert len(code) == 8
-
-    r = client.post("/api/extension/claim", json={"code": code})
-    assert r.status_code == 200
-    paired = r.json()
-    assert paired["user"]["email"] == "buyer@test.dev"
-    assert "password" not in str(paired)
-
-    # replaying the same code gets nothing
-    assert client.post("/api/extension/claim", json={"code": code}).status_code == 401
-    assert client.post("/api/extension/claim", json={"code": "ZZZZZZZZ"}).status_code == 401
-
-    # the token it handed over is a real session
-    hdr = {"Authorization": f"Bearer {paired['access_token']}"}
-    assert client.get("/api/extension/projects", headers=hdr).status_code == 200
-
-
 def test_extension_endpoints_require_auth(client):
     assert client.get("/api/extension/work").status_code == 401
     assert client.get("/api/extension/config").status_code == 401
-    assert client.post("/api/extension/pair").status_code == 401
 
 
 def test_one_students_bank_is_invisible_to_another(client, auth):

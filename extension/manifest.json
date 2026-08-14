@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AnswerBank Runner",
-  "version": "0.1.0",
-  "description": "Answers your question bank one question at a time using the AI tabs you're already signed into.",
-  "permissions": ["storage", "tabs", "scripting"],
+  "version": "0.2.0",
+  "description": "Answers your question bank using the AI tabs you're already signed into.",
+  "permissions": ["storage", "tabs"],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
+    "http://localhost:5173/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
@@ -21,6 +22,7 @@
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "content_scripts": [
     {
+      "_comment": "The AI sites the extension drives.",
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",
@@ -29,6 +31,12 @@
       ],
       "js": ["content/html2md.js", "content/driver.js"],
       "run_at": "document_idle"
+    },
+    {
+      "_comment": "The AnswerBank app itself. Running here is what removes all setup: same origin as the app, so the extension reads the session the student is already signed in with. ADD YOUR PRODUCTION DOMAIN HERE when you deploy.",
+      "matches": ["http://localhost:5173/*"],
+      "js": ["content/bridge.js"],
+      "run_at": "document_start"
     }
   ]
 }

@@ -22,8 +22,6 @@ async def lifespan(app: FastAPI):
     migrate_columns()  # adds post-v0.1 columns to an existing answerbank.db
     if s.secret_key.startswith("dev-insecure-change-me"):
         log.warning("SECRET_KEY is the dev default — set a real one in backend/.env before exposing this")
-    if s.mock_llm:
-        log.warning("MOCK_LLM=true — serving canned answers (demo/test mode)")
     if s.mock_payments:
         log.warning("MOCK_PAYMENTS=true — credit purchases complete without a gateway")
     worker = asyncio.create_task(worker_loop())
@@ -55,11 +53,4 @@ app.include_router(extension.router)
 
 @app.get("/api/health")
 def health():
-    s = get_settings()
-    from .services.providers import provider_available
-
-    return {
-        "ok": True,
-        "mock": s.mock_llm,
-        "providers": {p: provider_available(p) for p in ("google", "groq", "openrouter")},
-    }
+    return {"ok": True, "engine": "browser", "mock_payments": get_settings().mock_payments}

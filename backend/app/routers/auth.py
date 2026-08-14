@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..db import get_db
 from ..models import User
 from ..security import (
@@ -18,7 +17,6 @@ from ..security import (
     rotate_refresh_token,
     verify_password,
 )
-from ..services.queue import quota_used
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -89,11 +87,5 @@ def logout(body: RefreshIn, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    s = get_settings()
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "quota": {"daily": s.daily_question_quota, "used_today": quota_used(db, user.id)},
-    }
+def me(user: User = Depends(current_user)):
+    return {"id": user.id, "email": user.email, "name": user.name, "credits": user.credits or 0}

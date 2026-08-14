@@ -37,7 +37,6 @@ def get_db():
 _ADDED_COLUMNS = {
     "users": [("credits", "INTEGER NOT NULL DEFAULT 0")],
     "projects": [
-        ("engine_mode", "VARCHAR(20) NOT NULL DEFAULT 'auto'"),
         ("unlocked", "BOOLEAN NOT NULL DEFAULT 0"),
         ("unlock_reason", "VARCHAR(20) NOT NULL DEFAULT ''"),
     ],

@@ -1,30 +1,37 @@
 # AnswerBank Runner (Chrome extension)
 
-Answers a question bank using the AI tabs the student is **already signed into** —
-ChatGPT, Claude, Gemini — instead of an API key. It is a robot doing exactly what a
-human does in Assist mode: take one prompt, paste it into a fresh chat, copy the answer
-back.
+**This extension is the engine.** The AnswerBank server calls no models at all — every
+answer comes from the AI tabs the student is already signed into (ChatGPT, Claude,
+Gemini). It is a robot doing exactly what a human would: take one prompt, paste it into a
+fresh chat, copy the answer back.
 
 ## Install (development)
 
 1. `chrome://extensions` → turn on **Developer mode**
 2. **Load unpacked** → select this `extension/` folder
-3. Click the AnswerBank icon → ⚙ → confirm the server URL (default `http://localhost:8000`)
-4. In the web app: **Connect extension** → type the 8-character code into the popup
-5. Upload a bank, pick **“Use my browser AI”** at the review step, then hit
-   **Start answering** in the popup
+3. Reload the AnswerBank tab. The header should read *Extension ready*.
+
+That is the whole setup. **There is nothing to connect and no code to type** —
+`content/bridge.js` runs on the app's own origin, so it reads the session the student is
+already signed in with. Everything is driven from the web app: upload a bank, review the
+questions, press **Answer with my AI**. The popup is a read-only status panel.
 
 ## How it works
 
 ```
-server                              extension                     student's browser
-──────                              ─────────                     ─────────────────
-GET /api/extension/work    ──────►  open a FRESH chat tab   ────► chatgpt.com / claude.ai
-  {prompt, preferred_site}          paste prompt, click send
+app page          bridge.js         service worker              student's browser
+────────          ─────────         ──────────────              ─────────────────
+"Answer with  ──► relays with  ──►  GET /extension/work
+ my AI"           the session       {prompt, preferred_site}
+                                    open a FRESH chat tab ────► chatgpt.com / claude.ai
+                                    paste prompt, click send
                                     poll until output stops
                                     DOM ──► markdown
-POST /questions/{id}/assist ◄─────  answer
+progress bar ◄─── relays back  ◄──  POST /questions/{id}/assist
 ```
+
+The bridge relays a fixed set of message types and nothing else — the page can ask the
+worker to start, stop or report, and cannot reach any other extension API through it.
 
 **A fresh chat per question, every time.** This costs a few seconds of navigation and is
 non-negotiable: 40 questions in one thread is the exact failure AnswerBank exists to fix.
@@ -34,6 +41,10 @@ it), no prompt templates (they live in `solver.py`), no document builder, no API
 It receives one prompt at a time and hands back one answer. Unplug the server and it's
 an empty shell — which is also why the export paywall can't be bypassed by tampering
 with it.
+
+**No settings screen.** Which AI sites are usable is discovered by trying: a site that
+reports "not signed in" is dropped for the rest of the run and the next question picks
+another. Nothing to configure, nothing to get wrong.
 
 ## The part that will break
 
@@ -75,3 +86,6 @@ language tags, tables, nested lists, and the `FINAL:` line the numerical verifie
 - The Chrome Web Store rejects extensions that automate third-party services. Plan on
   load-unpacked or a self-hosted CRX.
 - Pin `EXTENSION_ORIGIN_REGEX` to your real extension ID before going public.
+- Add your production domain to the second `content_scripts` block in `manifest.json` —
+  it currently only matches `http://localhost:5173/*`, and without it the app can't
+  detect or drive the extension.

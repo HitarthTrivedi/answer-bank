@@ -3,8 +3,8 @@
 Read this first. It covers what works, what doesn't, what's deliberately the way it is,
 and what to do next in priority order.
 
-**Status: works end to end in mock mode. Not yet launchable.** One blocker (P0-1) stands
-between this and a real student using it.
+**Status: the browser-only engine is wired end to end. Not yet launchable.** One blocker
+(P0-1) stands between this and a real student using it.
 
 ---
 
@@ -14,6 +14,11 @@ Students upload a question bank (PDF / DOCX / image / pasted text). AnswerBank a
 **one question at a time** — because dumping 40 questions into a chatbot ruins answers
 25–40 — routing each question to the AI best suited to its type, then exports the lot as a
 polished DOCX with working, code, plots and diagrams.
+
+**The server never calls a model.** There are no AI keys and no provider code. Every
+answer is produced by the student's own ChatGPT / Claude / Gemini session, driven by the
+Chrome extension. What runs server-side is deterministic: regex extraction, keyword
+routing, SymPy verification, DOCX assembly.
 
 **Business model:** answering is free, the DOCX download costs ₹20 (1 credit). First bank
 free. See §6.
@@ -33,12 +38,19 @@ cp .env.example .env
 cd frontend && npm install && npm run dev      # http://localhost:5173
 ```
 
-Ships with `MOCK_LLM=true` and `MOCK_PAYMENTS=true`, so the whole product — including the
-₹20 checkout — runs with **zero API keys and no payment account**. Register, upload
-`sample_question_bank.txt`, watch it answer, hit export, pay the mock ₹20, get the DOCX.
+Then **install the extension — it is the engine, not an add-on**: `chrome://extensions` →
+Developer mode → Load unpacked → pick `extension/`. Reload the app; the header reads
+*Extension ready*. There is nothing to connect afterwards (see §7).
+
+`MOCK_PAYMENTS=true` means the ₹20 checkout completes with no gateway account. Register,
+upload `sample_question_bank.txt`, review, press **Answer with my AI**, watch it work,
+export, pay the mock ₹20, get the DOCX.
+
+Without the extension nothing breaks — every question just shows a ready-made prompt to
+paste into any AI tab by hand.
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q   # 23 tests
+cd backend && .venv/bin/python -m pytest tests/ -q   # 21 tests
 cd extension && npm install && npm test              # 10 tests
 ```
 
@@ -47,22 +59,28 @@ cd extension && npm install && npm test              # 10 tests
 ## 3. How it works
 
 ```
-upload → extract questions → student reviews/edits → picks who answers → sequential queue:
+upload → extract questions (regex) → student reviews/edits → sequential queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free; outranks everything below)
-  │ router agent ─ classifies: numerical | code | graph | diagram | theory
-  │ engine_mode=auto      → solver chain: first provider with a key for that type
-  │ engine_mode=extension → park for the student's own browser AI tabs
-  │      └ no provider either way → Assist mode (crafted prompt, manual paste-back)
+  │ router agent ─ keyword classify: numerical | code | graph | diagram | theory
+  │ else         ─ park the crafted prompt as `assist_waiting`
+  │                  → extension opens a FRESH ChatGPT/Claude/Gemini chat, pastes it,
+  │                    reads the reply back, posts it to /assist
+  │                  → or the student pastes it by hand — same prompt, same result
   │ verify       ─ numericals re-computed with SymPy → ✓ / ⚠ badge
   └ store → dashboard renders (KaTeX, code, mermaid, real plots)
 → DOCX export (cover, index, embedded figures) ── 🔒 1 credit
 ```
 
-**Three ways to answer, one prompt contract.** Server APIs, the Chrome extension, and
-manual paste-back all use the *same* crafted prompt from `solver.py`. An answer renders
-and exports identically however it arrived. This is why the extension needed almost no
-new backend — it's a robot doing what a human does in Assist mode.
+**One prompt contract.** The extension and a student pasting by hand use the *same*
+prompt from `solver.py`, so an answer renders and exports identically however it arrived.
+The extension is a robot doing exactly what a human would do — which is why it needed
+almost no new backend.
+
+**The UX is one button.** Upload → review → **Answer with my AI** → export. No engine
+choice, no pairing code, no popup: the extension's content script runs on the app's own
+origin, so it reads the session the student is already signed in with and the app drives
+the whole run from its own page. Installing the extension is the entire setup.
 
 ---
 
@@ -71,9 +89,9 @@ new backend — it's a robot doing what a human does in Assist mode.
 ### Core (v0.1)
 - Auth: scrypt passwords, JWT access + rotating opaque refresh tokens, rate limiting
 - Upload: magic-byte validation, PDF/DOCX/TXT/image text extraction
-- Question extraction (LLM + regex fallback) with a **student review step before any
-  quota is spent** — extraction is never silently trusted
-- Router agent → 5 question types; per-type solver chains configured in `models.json`
+- Question extraction (regex) with a **student review step before any answering starts** —
+  extraction is never silently trusted, so a miss costs one edit, not a wrong answer
+- Router agent → 5 question types, deciding prompt shape and target site
 - Sequential worker; state in DB, so a restart resumes exactly where it stopped
 - SymPy re-computation of numericals → verified ✓ / check-working ⚠ badge
 - Class cache: identical questions answered once, served to every classmate
@@ -92,9 +110,13 @@ new backend — it's a robot doing what a human does in Assist mode.
 - **Razorpay Payment Links** + a mock gateway (`services/payments.py`). No checkout SDK in
   the frontend, no card data near the server.
 - **Chrome MV3 extension** (`extension/`) — answers questions in the AI tabs the student
-  is already signed into. Pairs by 8-char single-use code, so it never sees the password.
-- **`engine_mode`** on a project: `auto` (our APIs) or `extension` (their browser).
-  Extension mode is exempt from the daily quota — it costs us no inference.
+  is already signed into, one fresh chat per question.
+- **Zero-setup pairing.** `content/bridge.js` runs on the app's own origin, so the
+  extension reads the existing session — no pairing code, no second login, no popup to
+  visit. The app drives the run and shows live progress on its own page.
+- **The server AI is gone.** No provider code, no `models.json`, no API keys, no quota.
+  Extraction and routing are deterministic; `solver.py` only builds prompts now. If you
+  need the old provider chain, it is in git history at `4247259`.
 - **Server-side DOM selectors** (`backend/extension_selectors.json`) served at
   `/api/extension/config` — the site-redesign hotfix channel (§7).
 - **Buyer's name on the DOCX cover** — mild anti-forwarding friction, not DRM.
@@ -104,13 +126,13 @@ new backend — it's a robot doing what a human does in Assist mode.
   `lru_cache`d settings object meant whichever test module imported first owned the app.
   Tests now pass in any order.
 
-### Test coverage — 33 total
-`backend` (23): auth + refresh rotation, upload magic bytes, extraction, SymPy
-verification incl. injection payloads, class cache, prompt-injection envelope, full mock
-pipeline, assist mode end to end, **export paywall** (free → 402 → paid unlock → free
-re-download), **webhook signature rejection**, **replay-safety** (a repeated callback
-doesn't mint a second credit), **pairing codes are single-use**, **cross-account
-isolation**.
+### Test coverage — 31 total
+`backend` (21): auth + refresh rotation, upload magic bytes, extraction, SymPy
+verification incl. injection payloads, class cache, prompt-injection envelope, the full
+pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
+question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →
+free re-download), **webhook signature rejection**, **replay-safety** (a repeated callback
+doesn't mint a second credit), **cross-account isolation**.
 
 `extension` (10): the HTML→markdown converter — KaTeX → original LaTeX, code fences with
 language tags, tables, nested lists, the `FINAL:` line the verifier reads, and that the
@@ -136,7 +158,7 @@ document.querySelectorAll("[data-message-author-role='assistant']").length
 Fix the JSON, restart the backend, re-run. No extension reinstall needed.
 
 **P0-2. End-to-end extension run.** Load unpacked (`chrome://extensions` → Developer
-mode → `extension/`), pair, run a 5-question bank, check the DOCX. Watch for: answers
+mode → `extension/`), reload the app, run a 5-question bank, check the DOCX. Watch for: answers
 truncated mid-generation (raise `settle_ms`), math arriving as unicode instead of LaTeX
 (`content` selector is wrong), navigation not producing a fresh chat.
 
@@ -192,10 +214,17 @@ Two tests enforce this. Do not add a "mark as paid" endpoint.
 
 ## 7. Design decisions — please don't undo these
 
-**One question at a time, fresh chat every time.** Both the server worker and the
-extension. It costs seconds and it *is* the product — 40 questions in one thread is the
-exact failure this exists to fix. The extension navigates to a new chat before every
-prompt for this reason.
+**One question at a time, fresh chat every time.** It costs seconds and it *is* the
+product — 40 questions in one thread is the exact failure this exists to fix. The
+extension navigates to a new chat before every prompt for this reason.
+
+**No server-side AI, deliberately.** Answers come only from the student's own browser
+session. Don't "helpfully" add an API fallback for questions the extension fails on —
+they stay `assist_waiting` on purpose, visible in the app for a manual paste.
+
+**The extension has no settings screen.** Which AI sites are usable is discovered by
+trying: a site that reports "not signed in" is dropped for the rest of the run and the
+next question picks another. Don't add checkboxes.
 
 **Selectors live on the server, not in the extension.** When ChatGPT renames a button you
 edit `backend/extension_selectors.json` and every installed extension picks it up on its
@@ -205,8 +234,8 @@ next run. Nobody reinstalls anything. Never hardcode a selector in the extension
 button is an accelerator only, because it's the selector most likely to go stale. A wrong
 `stop` selector costs speed, not correctness. Keep it that way.
 
-**Cache outranks engine mode.** A question the class already answered costs neither our
-API quota nor a trip through the student's browser. There's a test on this.
+**Cache outranks everything.** A question the class already answered costs nobody a trip
+through the browser at all. There's a test on this.
 
 **No model-generated code is ever executed.** Graphs are declarative JSON rendered
 server-side with matplotlib; numerical verification runs allowlisted arithmetic through
@@ -216,8 +245,8 @@ SymPy. Uploaded text is wrapped in `<question>` tags and declared data, never in
 document builder, no API keys — it receives one prompt at a time. This is *why* the
 paywall can't be bypassed by tampering with it. Don't move logic into it.
 
-**Models are named in `models.json` only.** No model strings in code, ever. Free-tier IDs
-rotate; verify current `:free` IDs at openrouter.ai/models before editing.
+**The prompt is the product.** `solver.py` is the only lever on answer quality now that
+we don't choose the model. Treat changes there as product changes, not refactors.
 
 ---
 
@@ -248,7 +277,7 @@ technically; matters if a college asks.
 ```
 backend/
   app/main.py               FastAPI app, middleware, lifespan (starts the worker)
-  app/config.py             settings (.env) — quotas, keys, billing, limits
+  app/config.py             settings (.env) — limits + billing (no AI keys anywhere)
   app/db.py                 engine, session, migrate_columns()
   app/models.py             SQLAlchemy schema
   app/security.py           scrypt, JWT, refresh rotation, rate limit, headers
@@ -256,13 +285,12 @@ backend/
     auth.py                 register / login / refresh / logout / me
     projects.py             upload, review, start, assist, explain, assets, EXPORT 🔒
     billing.py              balance, checkout, webhook, mock gateway
-    extension.py            pairing, config, work queue
+    extension.py            selector config + the work queue
   app/services/
-    providers.py            one OpenAI-compatible client for Google/Groq/OpenRouter + mock
     ingest.py               file validation + text extraction
-    extractor.py            raw text → questions
-    router_agent.py         question → type classification
-    solver.py               per-type prompts, assist prompts, explain-me
+    extractor.py            raw text → questions (regex)
+    router_agent.py         question → type classification (keywords)
+    solver.py               prompt construction — the whole quality lever
     verify.py               SymPy numerical re-computation (allowlisted)
     diagrams.py             graphspec → matplotlib PNG, mathtext renderer
     cache.py                class-wide answer cache
@@ -270,7 +298,6 @@ backend/
     export.py               markdown → DOCX
     billing.py              credit ledger + export paywall
     payments.py             Razorpay payment links + mock gateway
-  models.json               role → model config (the ONLY place models are named)
   extension_selectors.json  DOM contract for the extension ← the hotfix channel
 frontend/                   Vite + React + Tailwind
 extension/                  Chrome MV3 — see extension/README.md

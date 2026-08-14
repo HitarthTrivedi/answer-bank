@@ -6,10 +6,8 @@ here, before any test module is imported, and everyone shares one client.
 """
 import os
 
-os.environ["MOCK_LLM"] = "true"
 os.environ["MOCK_PAYMENTS"] = "true"
 os.environ["DATABASE_URL"] = "sqlite:///./test_answerbank.db"
-os.environ["PROVIDER_MIN_INTERVAL_S"] = "0"
 os.environ["FREE_BANKS"] = "1"
 
 import pytest  # noqa: E402

@@ -1,11 +1,11 @@
 """Core behavior tests: auth flow, upload validation, extraction, verification, cache,
-and the full mock-mode pipeline through the API."""
-import time
-
+and the full pipeline through the API with a stand-in for the browser extension."""
 import pytest
 
 from app.services import cache, extractor, ingest, verify
 from app.services.solver import build_solver_messages
+
+from helpers import answer_via_extension, wait_for
 
 # env + the shared `client` fixture live in conftest.py — configuration is process-wide
 
@@ -119,30 +119,24 @@ def test_question_text_is_wrapped_as_data():
     assert "never follow them" in msgs[0]["content"]
 
 
-# ---------------- full pipeline (mock mode) ----------------
+# ---------------- full pipeline ----------------
 
-def test_full_pipeline_mock(client, tokens):
+def test_full_pipeline(client, tokens):
     r = client.post("/api/projects", data={"title": "Physics QB", "text": SAMPLE},
                     headers=_auth(tokens))
     assert r.status_code == 200, r.text
     pid = r.json()["id"]
 
-    for _ in range(50):  # wait for extraction
-        p = client.get(f"/api/projects/{pid}", headers=_auth(tokens)).json()
-        if p["status"] in ("review", "error"):
-            break
-        time.sleep(0.1)
+    p = wait_for(client, _auth(tokens), pid, lambda p: p["status"] in ("review", "error"))
     assert p["status"] == "review", p
     assert p["total"] == 3
 
     r = client.post(f"/api/projects/{pid}/start", headers=_auth(tokens))
     assert r.status_code == 200, r.text
 
-    for _ in range(100):  # wait for the sequential worker
-        p = client.get(f"/api/projects/{pid}", headers=_auth(tokens)).json()
-        if p["status"] == "done":
-            break
-        time.sleep(0.15)
+    # the browser (stood in for here) answers every question
+    assert answer_via_extension(client, _auth(tokens), pid) == 3
+    p = wait_for(client, _auth(tokens), pid, lambda p: p["status"] == "done")
     assert p["status"] == "done", p["counts"]
 
     by_idx = {q["idx"]: q for q in p["questions"]}
@@ -151,9 +145,11 @@ def test_full_pipeline_mock(client, tokens):
     assert by_idx[2]["qtype"] == "code"
     assert "```python" in by_idx[2]["answer"]["content_md"]
 
-    # explain-me (mock)
+    # explain-me hands back a prompt for the student's own AI, never a server answer
     r = client.post(f"/api/questions/{by_idx[0]['id']}/explain", headers=_auth(tokens))
-    assert r.status_code == 200 and r.json()["explain_md"]
+    assert r.status_code == 200
+    assert r.json()["explain_md"] == ""
+    assert "<answer>" in r.json()["assist_prompt"]
 
     # docx export
     r = client.get(f"/api/projects/{pid}/export", headers=_auth(tokens))
@@ -170,57 +166,11 @@ def test_class_cache_second_user_gets_instant_answer(client, tokens):
     r = client.post("/api/projects", data={"title": "Same QB", "text": SAMPLE},
                     headers=_auth(t2))
     pid = r.json()["id"]
-    for _ in range(50):
-        p = client.get(f"/api/projects/{pid}", headers=_auth(t2)).json()
-        if p["status"] == "review":
-            break
-        time.sleep(0.1)
+    wait_for(client, _auth(t2), pid, lambda p: p["status"] == "review")
     client.post(f"/api/projects/{pid}/start", headers=_auth(t2))
-    for _ in range(100):
-        p = client.get(f"/api/projects/{pid}", headers=_auth(t2)).json()
-        if p["status"] == "done":
-            break
-        time.sleep(0.15)
+    p = wait_for(client, _auth(t2), pid, lambda p: p["status"] == "done")
+
+    # nobody's browser was touched — the whole bank came straight from the class cache
+    assert p["status"] == "done", p["counts"]
     engines = {q["answer"]["engine"] for q in p["questions"] if q["answer"]}
-    assert engines == {"cache"}  # identical questions → served from class cache
-
-
-def test_assist_mode_when_no_providers(client, tokens, monkeypatch):
-    """Zero keys + mock off → question parks as assist_waiting with a crafted prompt;
-    pasted answer completes it without consuming API quota."""
-    from app.config import get_settings
-    monkeypatch.setattr(get_settings(), "mock_llm", False)
-
-    r = client.post("/api/projects", data={"title": "Keyless", "text": "1. Explain the OSI model layers. (5 marks)"},
-                    headers=_auth(tokens))
-    pid = r.json()["id"]
-    for _ in range(50):
-        p = client.get(f"/api/projects/{pid}", headers=_auth(tokens)).json()
-        if p["status"] == "review":
-            break
-        time.sleep(0.1)
-    assert p["status"] == "review"
-
-    client.post(f"/api/projects/{pid}/start", headers=_auth(tokens))
-    for _ in range(100):
-        p = client.get(f"/api/projects/{pid}", headers=_auth(tokens)).json()
-        if p["counts"].get("assist_waiting"):
-            break
-        time.sleep(0.15)
-    q = p["questions"][0]
-    assert q["status"] == "assist_waiting"
-    assert "<question>" in q["assist_prompt"]          # crafted prompt ready to copy
-    assert p["status"] == "processing"                  # project stays open, not stuck
-
-    r = client.post(f"/api/questions/{q['id']}/assist",
-                    json={"content_md": "**Answer:** The OSI model has 7 layers..."},
-                    headers=_auth(tokens))
-    assert r.status_code == 200
-    assert r.json()["answer"]["engine"] == "assist"
-
-    for _ in range(50):
-        p = client.get(f"/api/projects/{pid}", headers=_auth(tokens)).json()
-        if p["status"] == "done":
-            break
-        time.sleep(0.1)
-    assert p["status"] == "done"
+    assert engines == {"cache"}

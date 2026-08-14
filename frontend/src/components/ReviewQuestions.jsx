@@ -1,7 +1,13 @@
-// Post-extraction checkpoint: the student fixes extraction mistakes BEFORE any
-// quota is spent. Extraction is never silently trusted.
+// Post-extraction checkpoint: the student fixes extraction mistakes BEFORE any answering
+// starts. Extraction is a regex, so it is never silently trusted — but a miss costs one
+// edit here rather than a wrong answer later.
+//
+// This is also where the whole run begins. One button: the server parks every question
+// with a prompt, then the extension works through them in the student's own AI tabs.
 import { useState } from 'react'
 import { api } from '../api'
+import { isInstalled, startRun } from '../extension'
+import ExtensionNeeded from './ExtensionNeeded'
 
 export default function ReviewQuestions({ project, onStarted }) {
   const [questions, setQuestions] = useState(
@@ -9,7 +15,7 @@ export default function ReviewQuestions({ project, onStarted }) {
   )
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [mode, setMode] = useState('auto')
+  const hasExt = isInstalled()
 
   const update = (i, patch) =>
     setQuestions(questions.map((q, j) => (j === i ? { ...q, ...patch } : q)))
@@ -25,7 +31,10 @@ export default function ReviewQuestions({ project, onStarted }) {
         .filter((q) => q.text.length >= 5)
       if (!clean.length) throw new Error('Add at least one question')
       await api.put(`/projects/${project.id}/questions`, { questions: clean })
-      await api.post(`/projects/${project.id}/start`, { engine_mode: mode })
+      await api.post(`/projects/${project.id}/start`)
+      // the server has now parked every question with a prompt; the extension takes it
+      // from here. If it isn't installed the questions simply wait for a manual paste.
+      if (hasExt) await startRun(project.id).catch((e) => setError(e.message))
       onStarted()
     } catch (e) {
       setError(e.message)
@@ -38,7 +47,7 @@ export default function ReviewQuestions({ project, onStarted }) {
       <div className="mb-4 rounded-xl border border-sky-500/25 bg-sky-500/5 p-4 text-sm text-sky-200">
         <span className="font-semibold">Review before answering:</span> we extracted{' '}
         {questions.length} question{questions.length === 1 ? '' : 's'}. Fix any splits or typos and
-        confirm marks — answer depth follows the marks. Nothing counts against your quota until you start.
+        confirm marks — answer depth follows the marks.
       </div>
 
       <div className="space-y-3">
@@ -65,27 +74,11 @@ export default function ReviewQuestions({ project, onStarted }) {
         ))}
       </div>
 
-      <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-        <p className="mb-3 text-sm font-medium">Who answers these?</p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {[
-            { key: 'auto', title: 'AnswerBank AI', blurb: "Our routed models. Hands-off, counts against your daily quota." },
-            { key: 'extension', title: 'Use my browser AI', blurb: 'ChatGPT / Claude / Gemini tabs you\'re signed into. Needs the extension. No quota.' },
-          ].map((o) => (
-            <button
-              key={o.key}
-              type="button"
-              onClick={() => setMode(o.key)}
-              className={`rounded-lg border p-3 text-left transition ${
-                mode === o.key ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 hover:border-slate-500'
-              }`}
-            >
-              <span className="block text-sm font-medium">{o.title}</span>
-              <span className="mt-0.5 block text-xs text-slate-400">{o.blurb}</span>
-            </button>
-          ))}
+      {!hasExt && (
+        <div className="mt-5">
+          <ExtensionNeeded />
         </div>
-      </div>
+      )}
 
       <div className="mt-4 flex items-center justify-between">
         <button onClick={add} className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-slate-500">
@@ -97,7 +90,9 @@ export default function ReviewQuestions({ project, onStarted }) {
             onClick={start} disabled={busy}
             className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50"
           >
-            {busy ? 'Starting…' : `Answer ${questions.length} questions →`}
+            {busy ? 'Starting…' : hasExt
+              ? `Answer ${questions.length} with my AI →`
+              : `Start ${questions.length} questions →`}
           </button>
         </div>
       </div>

@@ -5,9 +5,9 @@
 > look like bugs until you know why. This README explains the product; HANDOVER explains
 > the state it's in.
 >
-> **Current status: works end to end in mock mode, not yet launchable.** One blocker —
-> the Chrome extension has never been run against a live site
-> ([HANDOVER.md §5, P0-1](HANDOVER.md#5-whats-left)).
+> **Current status: browser-only engine wired end to end, not yet launchable.** One
+> blocker — the Chrome extension has never been run against a live ChatGPT/Claude/Gemini
+> page ([HANDOVER.md §5, P0-1](HANDOVER.md#5-whats-left)).
 
 **Question bank in → exam-ready answer document out.**
 
@@ -19,29 +19,32 @@ type, then exports everything as a polished DOCX with working, code, plots and d
 ## How it works
 
 ```
-upload → extract questions → student reviews/edits → picks who answers → sequential queue:
+upload → extract questions → student reviews/edits → sequential queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free, outranks everything below)
   │ router agent ─ classifies: numerical | code | graph | diagram | theory
-  │ engine_mode=auto      → solver chain: first available provider for that type
-  │ engine_mode=extension → park for the student's own AI tabs
-  │      └ no provider either way → Assist mode (crafted prompt, manual paste-back)
+  │ else          ─ park the crafted prompt for the student's own AI
+  │                  → Chrome extension pastes it into a fresh ChatGPT/Claude/Gemini chat
+  │                  → or the student pastes it by hand
   │ verify       ─ numericals re-computed with SymPy → ✓ / ⚠ badge
   └ store → dashboard renders (KaTeX, highlighted code, mermaid, real plots)
 → DOCX export (cover, index, embedded figures, credits) ── 🔒 1 credit
 ```
 
 **Key design decisions**
-- **Three ways to answer, one prompt contract.** Server APIs, the student's own browser
-  tabs (via the Chrome extension), or manual paste-back all use the *same* crafted
-  prompt — so an answer renders and exports identically however it arrived.
+- **This server never calls a model.** There are no API keys in `.env` and no provider
+  code in the repo. Every answer comes from the student's own browser AI. What runs
+  server-side is deterministic: regex extraction, keyword routing, SymPy verification,
+  DOCX assembly.
+- **One prompt contract.** The extension and a student pasting by hand use the *same*
+  crafted prompt, so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
   rendered server-side with matplotlib; numerical verification evaluates allowlisted
   arithmetic through SymPy. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 - **Class cache**: identical questions (hash includes marks + type) are answered once
   and served to every classmate instantly — the real cost killer, since whole classes
-  share the same bank. A cache hit outranks the engine mode: it costs neither our API
-  quota nor a trip through the student's browser.
+  share the same bank. A cache hit outranks everything: it costs nobody a trip through
+  the browser at all.
 - **Marks-aware depth**: "(2 marks)" gets 3 crisp lines; "(10 marks)" gets a full
   structured answer.
 
@@ -55,7 +58,7 @@ appears after the student has read every answer on screen.
 Two things make the margin work:
 - **The class cache.** Student #1 from a class costs compute; students #2–30 hit the
   cache and cost nothing. Thirty ₹20 sales on one bank's work is the actual business.
-- **Extension mode costs you zero inference** — it's the student's own ChatGPT/Gemini
+- **Inference costs you nothing, ever** — it's the student's own ChatGPT/Claude/Gemini
   subscription doing the work, which is also a better model than any free API tier.
 
 Credits are granted in exactly one place (`billing._grant`), reachable only by a
@@ -82,21 +85,21 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-`backend/.env` ships with `MOCK_LLM=true` → the whole product works immediately with
-canned deterministic answers (register, upload `sample_question_bank.txt`, watch it run,
-export the DOCX). For real answers:
+`backend/.env.example` needs no editing to run: there are no AI keys to add, and
+`MOCK_PAYMENTS=true` lets the ₹20 checkout complete without a gateway account.
 
-1. Set `MOCK_LLM=false` in `backend/.env`
-2. Add at least one key (all optional — with zero keys everything routes to Assist mode):
-   - `GOOGLE_API_KEY` — aistudio.google.com (⚠ a key shared with project delta shares
-     its gemma quota; prefer a separate key)
-   - `GROQ_API_KEY` — console.groq.com (code questions)
-   - `OPENROUTER_API_KEY` — openrouter.ai (DeepSeek R1 for numericals, Kimi K2 for
-     graphs/diagrams — free-tier model IDs)
+**Then install the Chrome extension** — it's the engine, not an add-on:
 
-**Models are configured only in `backend/models.json`** (role → provider/model fallback
-chains). Free-tier model IDs rotate — verify current `:free` IDs at openrouter.ai/models
-before editing. No model strings live in code.
+1. `chrome://extensions` → turn on **Developer mode**
+2. **Load unpacked** → select the `extension/` folder
+3. Reload the app. The header shows *Extension ready*.
+
+There is nothing to connect afterwards. The extension's content script runs on the app's
+own origin, so it picks up the session you're already signed in with — no pairing code,
+no second login. Upload a bank, review the questions, press **Answer with my AI**.
+
+Without the extension the product still works: every question shows a ready-made prompt
+to paste into any AI tab by hand.
 
 ## Tests
 
@@ -104,11 +107,11 @@ before editing. No model strings live in code.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-23 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+21 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
-full mock pipeline (upload → answers → explain → DOCX), assist mode end-to-end, the
-export paywall (free bank → 402 → paid unlock → free re-download), webhook signature +
-replay, extension pairing (single-use codes), and cross-account isolation.
+the full pipeline with a stand-in for the browser (`tests/helpers.py`), proof that no
+question is ever answered server-side, the export paywall (free bank → 402 → paid unlock
+→ free re-download), webhook signature + replay safety, and cross-account isolation.
 
 ```bash
 cd extension && npm install && npm test    # 10 tests: the HTML → markdown converter
@@ -119,17 +122,16 @@ cd extension && npm install && npm test    # 10 tests: the HTML → markdown con
 ```
 backend/
   app/main.py            FastAPI app, middleware, lifespan (starts the worker)
-  app/config.py          settings (.env) — quotas, keys, limits
+  app/config.py          settings (.env) — limits, billing (no AI keys; there is no AI here)
   app/models.py          SQLAlchemy schema (users, projects, questions, answers,
                          cache, usage ledger, audit log)
   app/security.py        scrypt, JWT, refresh rotation, rate limit, headers
-  app/routers/           auth + projects/questions/assist/explain/export routes
+  app/routers/           auth, projects/questions/assist/export, billing, extension
   app/services/
-    providers.py         one OpenAI-compatible client for Google/Groq/OpenRouter + mock
     ingest.py            file validation + text extraction
-    extractor.py         raw text → questions (LLM + regex fallback)
-    router_agent.py      question → type classification
-    solver.py            per-type prompts, assist prompts, explain-me
+    extractor.py         raw text → questions (regex — no model)
+    router_agent.py      question → type classification (keywords — no model)
+    solver.py            prompt construction — the only lever on answer quality
     verify.py            SymPy numerical re-computation (allowlisted)
     diagrams.py          graphspec → matplotlib PNG, mathtext renderer
     cache.py             class-wide answer cache
@@ -137,7 +139,6 @@ backend/
     export.py            markdown → DOCX (figures embedded)
     billing.py           credit ledger + the export paywall
     payments.py          Razorpay payment links + mock gateway
-  models.json            role → model config (the only place models are named)
   extension_selectors.json  DOM contract for the extension — the site-redesign hotfix channel
 frontend/                Vite + React + Tailwind dashboard
 extension/               Chrome MV3 extension (see its own README)
@@ -148,7 +149,7 @@ SECURITY_AUDIT.md        implemented controls + pre-launch checklist
 ## Roadmap (not yet built)
 
 - PDF export; image OCR bundling (needs tesseract); scanned-PDF OCR
-- Email verification + password reset; billing/plans on top of the usage ledger
+- Email verification + password reset
 - Postgres + Redis for multi-node deploys (config-only swap for the DB)
 - Per-course spaces and shared class libraries on top of the answer cache
 - "Important questions" prediction from past papers

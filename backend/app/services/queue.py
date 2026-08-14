@@ -1,19 +1,20 @@
 """The one-question-at-a-time worker — the core product mechanic.
 
 A single global asyncio loop drains projects in `processing` status question by
-question: cache → route → solve → verify → store. Sequential on purpose: it maximizes
-per-answer quality, naturally respects free-tier RPM limits, and makes progress
-legible. Questions that need a human (Assist mode) are parked as `assist_waiting`
-without blocking the rest of the queue.
+question: cache → route → hand to the browser. Sequential on purpose: it maximizes
+per-answer quality and makes progress legible.
+
+This server never answers anything itself. Every question that isn't already in the
+class cache is parked as `assist_waiting` with a crafted prompt, and the student's own
+AI — driven by the Chrome extension, or pasted by hand — produces the answer.
 
 State lives in the DB, so a restart resumes exactly where it stopped.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 from ..db import SessionLocal
-from ..models import Answer, Project, Question, UsageLedger
+from ..models import Answer, Project, Question
 from . import cache, router_agent, solver
 
 log = logging.getLogger("answerbank.queue")
@@ -24,24 +25,6 @@ _wake = asyncio.Event()
 def wake() -> None:
     """Routes call this after enqueuing work so the worker reacts instantly."""
     _wake.set()
-
-
-def today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def quota_used(db, user_id: str) -> int:
-    row = db.query(UsageLedger).filter_by(user_id=user_id, day=today()).first()
-    return row.used if row else 0
-
-
-def _consume_quota(db, user_id: str) -> None:
-    row = db.query(UsageLedger).filter_by(user_id=user_id, day=today()).first()
-    if row is None:
-        db.add(UsageLedger(user_id=user_id, day=today(), used=1))
-    else:
-        row.used += 1
-    db.commit()
 
 
 async def worker_loop() -> None:
@@ -72,7 +55,7 @@ def _requeue_stale() -> None:
 
 
 async def _process_next() -> bool:
-    """Pick the oldest pending question of any processing project; solve it fully."""
+    """Pick the oldest pending question of any processing project; route it."""
     db = SessionLocal()
     try:
         q = (
@@ -86,12 +69,11 @@ async def _process_next() -> bool:
             _finalize_done_projects(db)
             return False
 
-        project = db.get(Project, q.project_id)
         q.status = "answering"
         db.commit()
 
         try:
-            await _answer_question(db, project, q)
+            _route_question(db, q)
         except Exception as e:
             log.exception("question %s failed", q.id)
             q.status = "error"
@@ -103,14 +85,15 @@ async def _process_next() -> bool:
         db.close()
 
 
-async def _answer_question(db, project: Project, q: Question) -> None:
-    # 1. route (skip if a regenerate already fixed the type)
+def _route_question(db, q: Question) -> None:
+    # 1. classify (skip if a regenerate already fixed the type)
     if not q.qtype:
-        route = await router_agent.classify(q.text)
+        route = router_agent.classify(q.text)
         q.qtype, q.route_reason = route["qtype"], route["reason"]
         db.commit()
 
-    # 2. class cache — free, instant
+    # 2. class cache — free, instant, and it outranks the browser: a question the class
+    #    already answered shouldn't cost anyone another trip through ChatGPT.
     hit = cache.lookup(db, q.text, q.marks, q.qtype)
     if hit is not None:
         _store_answer(db, q, content_md=hit.content_md, engine="cache",
@@ -118,29 +101,7 @@ async def _answer_question(db, project: Project, q: Question) -> None:
                       verify_note="served from class cache")
         return
 
-    # 3. solve via API chain, or park for Assist mode (human paste-back or the extension)
-    #    engine_mode="extension" skips the API chain entirely — the student's own AI tabs
-    #    answer everything, so the cache above is still honoured but nothing is billed to us.
-    if project.engine_mode == "extension":
-        _park_for_assist(db, q)
-        return
-    try:
-        result = await solver.solve(q.text, q.qtype, q.marks)
-    except solver.NoProviderError:
-        _park_for_assist(db, q)
-        return
-
-    _store_answer(db, q, content_md=result["content_md"], engine="api",
-                  provider=result["provider"], model=result["model"],
-                  verified=result["verified"], verify_note=result["verify_note"])
-    cache.store(db, q.text, q.marks, q.qtype, content_md=result["content_md"],
-                provider=result["provider"], model=result["model"], verified=result["verified"])
-    _consume_quota(db, project.user_id)
-
-
-def _park_for_assist(db, q: Question) -> None:
-    """Hand the question to a human (paste-back) or to the Chrome extension. Identical
-    prompt either way, so the answer renders the same however it came back."""
+    # 3. hand it to the student's own AI
     q.status = "assist_waiting"
     q.assist_prompt = solver.build_assist_prompt(q.text, q.qtype, q.marks)
     db.commit()
@@ -159,8 +120,8 @@ def _store_answer(db, q: Question, **kw) -> None:
 
 def _finalize_done_projects(db) -> None:
     """processing → done once nothing is pending/answering. A project whose only open
-    questions are assist_waiting stays 'processing' so the assist panel keeps showing;
-    it flips to done when those answers are submitted."""
+    questions are assist_waiting stays 'processing' so the run keeps showing as live;
+    it flips to done when those answers come back."""
     for project in db.query(Project).filter_by(status="processing").all():
         states = {qq.status for qq in project.questions}
         if states & {"pending", "answering", "assist_waiting"}:
