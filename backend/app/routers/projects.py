@@ -13,7 +13,7 @@ from ..config import DATA_DIR, get_settings
 from ..db import SessionLocal, get_db
 from ..models import Answer, AnswerAsset, Project, Question, User
 from ..security import audit, client_ip, current_user
-from ..services import cache, diagrams, export, extractor, ingest, solver, verify
+from ..services import billing, cache, diagrams, export, extractor, ingest, solver, verify
 from ..services.queue import quota_used, wake
 
 log = logging.getLogger("answerbank.projects")
@@ -68,6 +68,7 @@ def _project_dict(p: Project, with_questions: bool = False) -> dict:
         "id": p.id, "title": p.title, "status": p.status, "error": p.error,
         "source_filename": p.source_filename, "created_at": p.created_at.isoformat(),
         "total": len(p.questions), "counts": counts,
+        "engine_mode": p.engine_mode, "unlocked": p.unlocked,
     }
     if with_questions:
         d["questions"] = [_question_dict(q) for q in p.questions]
@@ -190,8 +191,12 @@ def update_questions(project_id: str, body: QuestionsUpdate,
 # ---------------------------------------------------------------- processing
 
 
+class StartIn(BaseModel):
+    engine_mode: str = Field(default="auto", pattern="^(auto|extension)$")
+
+
 @router.post("/projects/{project_id}/start")
-def start_processing(project_id: str, request: Request,
+def start_processing(project_id: str, request: Request, body: StartIn | None = None,
                      user: User = Depends(current_user), db: Session = Depends(get_db)):
     project = _own_project(db, user, project_id)
     if project.status not in ("review", "done"):
@@ -200,18 +205,23 @@ def start_processing(project_id: str, request: Request,
     if not pending:
         raise HTTPException(409, "No pending questions to process")
 
-    s = get_settings()
-    remaining = s.daily_question_quota - quota_used(db, user.id)
-    if len(pending) > remaining:
-        raise HTTPException(
-            429,
-            f"Daily quota: {remaining} of {s.daily_question_quota} questions left today, "
-            f"but this run needs {len(pending)}. Split the bank or continue tomorrow.",
-        )
+    project.engine_mode = body.engine_mode if body else "auto"
+
+    # extension mode spends the student's own AI, not our provider quota — so it isn't capped
+    if project.engine_mode == "auto":
+        s = get_settings()
+        remaining = s.daily_question_quota - quota_used(db, user.id)
+        if len(pending) > remaining:
+            raise HTTPException(
+                429,
+                f"Daily quota: {remaining} of {s.daily_question_quota} questions left today, "
+                f"but this run needs {len(pending)}. Split the bank or continue tomorrow.",
+            )
 
     project.status = "processing"
     db.commit()
-    audit(db, "processing_started", user.id, detail=f"{project.id} ({len(pending)} q)", ip=client_ip(request))
+    audit(db, "processing_started", user.id,
+          detail=f"{project.id} ({len(pending)} q, {project.engine_mode})", ip=client_ip(request))
     wake()
     return _project_dict(project)
 
@@ -386,8 +396,10 @@ def export_docx(project_id: str, request: Request,
     project = _own_project(db, user, project_id)
     if not any(q.answer is not None for q in project.questions):
         raise HTTPException(409, "Nothing answered yet — nothing to export")
-    data = export.build_docx(project, db)
-    audit(db, "export_docx", user.id, detail=project_id, ip=client_ip(request))
+    # the product's one paid moment; raises 402 with the paywall payload if unaffordable
+    how = billing.ensure_unlocked(db, user, project)
+    data = export.build_docx(project, db, buyer=user.name)
+    audit(db, "export_docx", user.id, detail=f"{project_id} ({how})", ip=client_ip(request))
     safe_title = re.sub(r"[^\w\- ]", "", project.title)[:60].strip() or "answers"
     return Response(
         data,

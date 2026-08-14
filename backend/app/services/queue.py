@@ -118,13 +118,16 @@ async def _answer_question(db, project: Project, q: Question) -> None:
                       verify_note="served from class cache")
         return
 
-    # 3. solve via API chain, or park for Assist mode
+    # 3. solve via API chain, or park for Assist mode (human paste-back or the extension)
+    #    engine_mode="extension" skips the API chain entirely — the student's own AI tabs
+    #    answer everything, so the cache above is still honoured but nothing is billed to us.
+    if project.engine_mode == "extension":
+        _park_for_assist(db, q)
+        return
     try:
         result = await solver.solve(q.text, q.qtype, q.marks)
     except solver.NoProviderError:
-        q.status = "assist_waiting"
-        q.assist_prompt = solver.build_assist_prompt(q.text, q.qtype, q.marks)
-        db.commit()
+        _park_for_assist(db, q)
         return
 
     _store_answer(db, q, content_md=result["content_md"], engine="api",
@@ -133,6 +136,14 @@ async def _answer_question(db, project: Project, q: Question) -> None:
     cache.store(db, q.text, q.marks, q.qtype, content_md=result["content_md"],
                 provider=result["provider"], model=result["model"], verified=result["verified"])
     _consume_quota(db, project.user_id)
+
+
+def _park_for_assist(db, q: Question) -> None:
+    """Hand the question to a human (paste-back) or to the Chrome extension. Identical
+    prompt either way, so the answer renders the same however it came back."""
+    q.status = "assist_waiting"
+    q.assist_prompt = solver.build_assist_prompt(q.text, q.qtype, q.marks)
+    db.commit()
 
 
 def _store_answer(db, q: Question, **kw) -> None:

@@ -166,5 +166,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
         # API serves JSON + a few images; nothing here should ever execute scripts.
-        resp.headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
+        # The one HTML page (the mock payment receipt) needs its own inline stylesheet —
+        # still no scripts, so an injection has nothing to run.
+        if resp.headers.get("content-type", "").startswith("text/html"):
+            resp.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        else:
+            resp.headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
         return resp

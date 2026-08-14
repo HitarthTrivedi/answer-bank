@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .db import Base, engine
-from .routers import auth, projects
+from .db import Base, engine, migrate_columns
+from .routers import auth, billing, extension, projects
 from .security import RateLimitMiddleware, SecurityHeadersMiddleware
 from .services.queue import worker_loop
 
@@ -19,10 +19,13 @@ log = logging.getLogger("answerbank")
 async def lifespan(app: FastAPI):
     s = get_settings()
     Base.metadata.create_all(engine)
+    migrate_columns()  # adds post-v0.1 columns to an existing answerbank.db
     if s.secret_key.startswith("dev-insecure-change-me"):
         log.warning("SECRET_KEY is the dev default — set a real one in backend/.env before exposing this")
     if s.mock_llm:
         log.warning("MOCK_LLM=true — serving canned answers (demo/test mode)")
+    if s.mock_payments:
+        log.warning("MOCK_PAYMENTS=true — credit purchases complete without a gateway")
     worker = asyncio.create_task(worker_loop())
     yield
     worker.cancel()
@@ -37,6 +40,8 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().frontend_origin],
+    # the Chrome extension calls this API from chrome-extension://<id>
+    allow_origin_regex=get_settings().extension_origin_regex,
     allow_credentials=False,  # bearer tokens, not cookies — no credentialed CORS needed
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -44,6 +49,8 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(projects.router)
+app.include_router(billing.router)
+app.include_router(extension.router)
 
 
 @app.get("/api/health")

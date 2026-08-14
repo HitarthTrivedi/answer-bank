@@ -1,0 +1,54 @@
+{
+  "_comment": "DOM contract between the Chrome extension and each AI site. Served live at GET /api/extension/config, so when a site renames a button you edit THIS FILE and every installed extension picks it up on its next run — no re-install. Selector lists are tried in order, first match wins. VERIFY THESE against the live sites before launch: they are the one part of this system that a third party can change without telling you.",
+  "version": 1,
+  "default_site": "chatgpt",
+
+  "routing": {
+    "_comment": "question type -> preferred site. The extension falls back to any site the student has enabled if the preferred one is off.",
+    "numerical": "chatgpt",
+    "code": "chatgpt",
+    "graph": "gemini",
+    "diagram": "gemini",
+    "theory": "claude"
+  },
+
+  "settle_ms": 1200,
+  "poll_ms": 1500,
+  "max_wait_s": 300,
+
+  "sites": {
+    "chatgpt": {
+      "label": "ChatGPT",
+      "url": "https://chatgpt.com/",
+      "match": ["chatgpt.com", "chat.openai.com"],
+      "composer": ["#prompt-textarea", "div[contenteditable='true']#prompt-textarea", "textarea[data-id]"],
+      "send": ["button[data-testid='send-button']", "#composer-submit-button", "button[aria-label*='Send']"],
+      "stop": ["button[data-testid='stop-button']", "button[aria-label*='Stop']"],
+      "turn": ["[data-message-author-role='assistant']"],
+      "content": [".markdown", ".prose"],
+      "login_hint": ["a[href*='/auth/login']", "button[data-testid='login-button']"]
+    },
+    "claude": {
+      "label": "Claude",
+      "url": "https://claude.ai/new",
+      "match": ["claude.ai"],
+      "composer": ["div[contenteditable='true'].ProseMirror", "fieldset div[contenteditable='true']", "div[contenteditable='true']"],
+      "send": ["button[aria-label='Send message']", "button[aria-label*='Send']", "button[type='submit']"],
+      "stop": ["button[aria-label*='Stop']"],
+      "turn": [".font-claude-message", "[data-is-streaming]"],
+      "content": [".font-claude-message", ":scope"],
+      "login_hint": ["button[data-testid='login-with-google']", "a[href*='/login']"]
+    },
+    "gemini": {
+      "label": "Gemini",
+      "url": "https://gemini.google.com/app",
+      "match": ["gemini.google.com"],
+      "composer": ["rich-textarea .ql-editor", "div.ql-editor[contenteditable='true']", "div[contenteditable='true']"],
+      "send": ["button.send-button", "button[aria-label*='Send']"],
+      "stop": ["button[aria-label*='Stop']", "button.stop-icon"],
+      "turn": ["model-response", "message-content"],
+      "content": ["message-content", ".model-response-text", ":scope"],
+      "login_hint": ["a[href*='accounts.google.com']"]
+    }
+  }
+}

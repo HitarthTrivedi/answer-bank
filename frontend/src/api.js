@@ -40,7 +40,12 @@ async function request(path, opts = {}, canRetry = true) {
   if (!res.ok) {
     let detail = res.statusText
     try { detail = (await res.json()).detail ?? detail } catch { /* not json */ }
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    // structured details (the 402 paywall payload) survive as err.payload so the caller
+    // can render a real dialog instead of stringifying an object into an alert
+    const err = new Error(typeof detail === 'string' ? detail : (detail.message || 'Request failed'))
+    err.status = res.status
+    err.payload = typeof detail === 'string' ? null : detail
+    throw err
   }
   return res
 }

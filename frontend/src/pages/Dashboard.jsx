@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import ConnectExtension from '../components/ConnectExtension'
+import Paywall from '../components/Paywall'
 
 const STATUS_STYLE = {
   extracting: 'bg-amber-500/15 text-amber-400',
@@ -15,9 +17,13 @@ export default function Dashboard() {
   const { user, logout, refreshMe } = useAuth()
   const [projects, setProjects] = useState(null)
   const [showNew, setShowNew] = useState(false)
+  const [showPair, setShowPair] = useState(false)
+  const [showBuy, setShowBuy] = useState(null)
+  const [balance, setBalance] = useState(null)
 
   const load = () => api.get('/projects').then(setProjects).catch(() => setProjects([]))
-  useEffect(() => { load(); refreshMe() }, [])
+  const loadBalance = () => api.get('/billing/me').then(setBalance).catch(() => {})
+  useEffect(() => { load(); loadBalance(); refreshMe() }, [])
 
   return (
     <div className="min-h-screen">
@@ -25,11 +31,19 @@ export default function Dashboard() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <Link to="/" className="font-bold">Answer<span className="text-indigo-400">Bank</span></Link>
           <div className="flex items-center gap-4 text-sm">
-            {user?.quota && (
-              <span className="text-slate-400">
-                {user.quota.daily - user.quota.used_today} / {user.quota.daily} questions left today
-              </span>
+            {balance && (
+              <button
+                onClick={() => setShowBuy(balance)}
+                className="rounded-full bg-indigo-500/15 px-3 py-1 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/25"
+              >
+                {balance.free_banks_left > 0
+                  ? `${balance.free_banks_left} free bank${balance.free_banks_left === 1 ? '' : 's'}`
+                  : `${balance.credits} credit${balance.credits === 1 ? '' : 's'}`}
+              </button>
             )}
+            <button onClick={() => setShowPair(true)} className="text-slate-400 hover:text-slate-200">
+              Connect extension
+            </button>
             <span className="text-slate-300">{user?.name}</span>
             <button onClick={logout} className="text-slate-500 hover:text-slate-300">Sign out</button>
           </div>
@@ -81,6 +95,14 @@ export default function Dashboard() {
       </main>
 
       {showNew && <NewProject onClose={() => setShowNew(false)} />}
+      {showPair && <ConnectExtension onClose={() => setShowPair(false)} />}
+      {showBuy && (
+        <Paywall
+          info={showBuy}
+          onClose={() => setShowBuy(null)}
+          onPaid={() => { setShowBuy(null); loadBalance() }}
+        />
+      )}
     </div>
   )
 }

@@ -1,28 +1,13 @@
 """Core behavior tests: auth flow, upload validation, extraction, verification, cache,
 and the full mock-mode pipeline through the API."""
-import os
 import time
 
 import pytest
 
-os.environ["MOCK_LLM"] = "true"
-os.environ["DATABASE_URL"] = "sqlite:///./test_answerbank.db"
-os.environ["PROVIDER_MIN_INTERVAL_S"] = "0"
+from app.services import cache, extractor, ingest, verify
+from app.services.solver import build_solver_messages
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.main import app  # noqa: E402
-from app.services import cache, extractor, ingest, verify  # noqa: E402
-from app.services.solver import build_solver_messages  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:  # `with` runs lifespan → starts the worker
-        yield c
-    for f in ("test_answerbank.db", "test_answerbank.db-wal", "test_answerbank.db-shm"):
-        if os.path.exists(f):
-            os.remove(f)
+# env + the shared `client` fixture live in conftest.py — configuration is process-wide
 
 
 @pytest.fixture(scope="module")

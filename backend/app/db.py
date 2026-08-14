@@ -30,3 +30,30 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# Columns added after v0.1 shipped. create_all() only creates missing *tables*, so an
+# existing answerbank.db needs these added by hand. Idempotent — safe on every boot.
+_ADDED_COLUMNS = {
+    "users": [("credits", "INTEGER NOT NULL DEFAULT 0")],
+    "projects": [
+        ("engine_mode", "VARCHAR(20) NOT NULL DEFAULT 'auto'"),
+        ("unlocked", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("unlock_reason", "VARCHAR(20) NOT NULL DEFAULT ''"),
+    ],
+}
+
+
+def migrate_columns() -> None:
+    if engine.dialect.name != "sqlite":  # Postgres deploys get a real migration tool
+        return
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
+            if not existing:  # table itself doesn't exist yet — create_all will make it complete
+                continue
+            for name, ddl in columns:
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))

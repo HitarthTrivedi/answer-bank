@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import AnswerCard from '../components/AnswerCard'
+import Paywall from '../components/Paywall'
 import ReviewQuestions from '../components/ReviewQuestions'
 
 export default function Project() {
@@ -9,6 +10,7 @@ export default function Project() {
   const nav = useNavigate()
   const [project, setProject] = useState(null)
   const [error, setError] = useState('')
+  const [paywall, setPaywall] = useState(null)
   const pollRef = useRef(null)
 
   const load = useCallback(async () => {
@@ -43,8 +45,10 @@ export default function Project() {
       a.download = `${project.title.replace(/[^\w\- ]/g, '')}.docx`
       a.click()
       URL.revokeObjectURL(url)
+      load()  // the first export consumes the free bank / a credit
     } catch (e) {
-      alert(e.message)
+      if (e.status === 402) setPaywall(e.payload)
+      else alert(e.message)
     }
   }
 
@@ -84,7 +88,7 @@ export default function Project() {
                 onClick={exportDocx}
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold hover:bg-emerald-500"
               >
-                ⬇ Export DOCX
+                {project.unlocked ? '⬇ Export DOCX' : '⬇ Export DOCX · 1 credit'}
               </button>
             )}
             <button onClick={del} className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-400 hover:border-red-500 hover:text-red-400">
@@ -127,12 +131,29 @@ export default function Project() {
 
       {project.status === 'review' && <ReviewQuestions project={project} onStarted={load} />}
 
+      {project.engine_mode === 'extension' && needYou > 0 && (
+        <div className="mb-4 rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-4 text-sm text-indigo-200">
+          <span className="font-semibold">Extension mode:</span> {needYou} question
+          {needYou === 1 ? '' : 's'} waiting for your own AI. Open the AnswerBank extension
+          and hit <span className="font-medium">Start answering</span> — or answer any of them
+          by hand below.
+        </div>
+      )}
+
       {['processing', 'done'].includes(project.status) && (
         <div className="space-y-4">
           {project.questions.map((q) => (
             <AnswerCard key={q.id} q={q} onChanged={load} />
           ))}
         </div>
+      )}
+
+      {paywall && (
+        <Paywall
+          info={paywall}
+          onClose={() => setPaywall(null)}
+          onPaid={() => { setPaywall(null); exportDocx() }}
+        />
       )}
     </Shell>
   )

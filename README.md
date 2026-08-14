@@ -10,31 +10,54 @@ type, then exports everything as a polished DOCX with working, code, plots and d
 ## How it works
 
 ```
-upload → extract questions → student reviews/edits → sequential queue:
+upload → extract questions → student reviews/edits → picks who answers → sequential queue:
   ┌ per question ┐
-  │ class cache? ─ hit → instant answer (free)
+  │ class cache? ─ hit → instant answer (free, outranks everything below)
   │ router agent ─ classifies: numerical | code | graph | diagram | theory
-  │ solver chain ─ first available provider for that type
-  │      └ none available → Assist mode (crafted prompt, student's own AI tab)
+  │ engine_mode=auto      → solver chain: first available provider for that type
+  │ engine_mode=extension → park for the student's own AI tabs
+  │      └ no provider either way → Assist mode (crafted prompt, manual paste-back)
   │ verify       ─ numericals re-computed with SymPy → ✓ / ⚠ badge
   └ store → dashboard renders (KaTeX, highlighted code, mermaid, real plots)
-→ one-click DOCX export (cover, index, embedded figures, credits)
+→ DOCX export (cover, index, embedded figures, credits) ── 🔒 1 credit
 ```
 
 **Key design decisions**
-- **No browser puppeteering of ChatGPT/Claude/etc.** — that breaks their ToS, gets
-  student accounts banned, and dies with every bot-detection update. Instead:
-  free-tier APIs by default + **Assist mode** (the app crafts a perfect one-question
-  prompt; the student pastes it into their own AI tab and pastes the answer back —
-  same quality, zero cost, fully compliant).
+- **Three ways to answer, one prompt contract.** Server APIs, the student's own browser
+  tabs (via the Chrome extension), or manual paste-back all use the *same* crafted
+  prompt — so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
   rendered server-side with matplotlib; numerical verification evaluates allowlisted
   arithmetic through SymPy. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
 - **Class cache**: identical questions (hash includes marks + type) are answered once
   and served to every classmate instantly — the real cost killer, since whole classes
-  share the same bank.
+  share the same bank. A cache hit outranks the engine mode: it costs neither our API
+  quota nor a trip through the student's browser.
 - **Marks-aware depth**: "(2 marks)" gets 3 crisp lines; "(10 marks)" gets a full
   structured answer.
+
+## Making money
+
+Answering is free. **Downloading the finished DOCX costs 1 credit** (₹20), and unlocking
+is stored per question bank, so re-downloads are free forever — you charge for the
+document, not the click. The first bank is free (`FREE_BANKS=1`), so the paywall only
+appears after the student has read every answer on screen.
+
+Two things make the margin work:
+- **The class cache.** Student #1 from a class costs compute; students #2–30 hit the
+  cache and cost nothing. Thirty ₹20 sales on one bank's work is the actual business.
+- **Extension mode costs you zero inference** — it's the student's own ChatGPT/Gemini
+  subscription doing the work, which is also a better model than any free API tier.
+
+Credits are granted in exactly one place (`billing._grant`), reachable only by a
+signature-verified Razorpay webhook. The browser can start an order, never finish one.
+`MOCK_PAYMENTS=true` runs the whole flow with no gateway account.
+
+## Chrome extension
+
+`extension/` — answers questions in the AI tabs the student is already signed into, one
+fresh chat per question. See [extension/README.md](extension/README.md) for install,
+the selector-hotfix channel, and the ToS caveats you should pass on to students.
 
 ## Quickstart
 
@@ -72,9 +95,15 @@ before editing. No model strings live in code.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-14 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+23 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
-full mock pipeline (upload → answers → explain → DOCX), assist mode end-to-end.
+full mock pipeline (upload → answers → explain → DOCX), assist mode end-to-end, the
+export paywall (free bank → 402 → paid unlock → free re-download), webhook signature +
+replay, extension pairing (single-use codes), and cross-account isolation.
+
+```bash
+cd extension && npm install && npm test    # 10 tests: the HTML → markdown converter
+```
 
 ## Repo layout
 
@@ -97,8 +126,12 @@ backend/
     cache.py             class-wide answer cache
     queue.py             the one-question-at-a-time worker
     export.py            markdown → DOCX (figures embedded)
+    billing.py           credit ledger + the export paywall
+    payments.py          Razorpay payment links + mock gateway
   models.json            role → model config (the only place models are named)
+  extension_selectors.json  DOM contract for the extension — the site-redesign hotfix channel
 frontend/                Vite + React + Tailwind dashboard
+extension/               Chrome MV3 extension (see its own README)
 sample_question_bank.txt demo input covering all five question types
 SECURITY_AUDIT.md        implemented controls + pre-launch checklist
 ```

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="logo">Answer<b>Bank</b></span>
+    <button id="gear" class="icon-btn" title="Settings">⚙</button>
+  </header>
+
+  <!-- not paired yet -->
+  <section id="view-connect" hidden>
+    <p class="lead">Connect this extension to your AnswerBank account.</p>
+    <ol class="steps">
+      <li>Open AnswerBank in a tab</li>
+      <li>Click <b>Connect extension</b></li>
+      <li>Type the 8-character code below</li>
+    </ol>
+    <input id="code" maxlength="8" placeholder="ABCD2345" autocomplete="off" spellcheck="false">
+    <button id="pair" class="primary">Connect</button>
+    <p id="pair-error" class="error" hidden></p>
+  </section>
+
+  <!-- paired -->
+  <section id="view-main" hidden>
+    <div class="row account">
+      <span id="who" class="muted"></span>
+      <span id="credits" class="pill"></span>
+    </div>
+
+    <label class="label" for="project">Question bank</label>
+    <select id="project"></select>
+    <p id="project-meta" class="muted small"></p>
+
+    <button id="run" class="primary">Start answering</button>
+    <button id="stop" class="secondary" hidden>Stop</button>
+
+    <div id="progress-wrap" hidden>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <p id="status" class="small"></p>
+    </div>
+
+    <p id="errors" class="error small" hidden></p>
+    <p class="hint">Keep this browser open while it runs. Each question gets its own
+      fresh chat, so answer 40 doesn't inherit answer 1's context.</p>
+  </section>
+
+  <!-- settings -->
+  <section id="view-settings" hidden>
+    <label class="label">Use these AI sites</label>
+    <label class="check"><input type="checkbox" data-site="chatgpt"> ChatGPT</label>
+    <label class="check"><input type="checkbox" data-site="claude"> Claude</label>
+    <label class="check"><input type="checkbox" data-site="gemini"> Gemini</label>
+    <p class="hint">You must already be signed in to each one in this browser.</p>
+
+    <label class="label" for="api">AnswerBank server</label>
+    <input id="api" spellcheck="false" placeholder="http://localhost:8000">
+
+    <button id="save" class="primary">Save</button>
+    <button id="disconnect" class="danger">Disconnect account</button>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "answerbank-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling only — Chrome loads this folder directly and ignores this file.",
+  "scripts": {
+    "test": "node --test test/html2md.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}

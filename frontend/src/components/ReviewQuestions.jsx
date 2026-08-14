@@ -9,6 +9,7 @@ export default function ReviewQuestions({ project, onStarted }) {
   )
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState('auto')
 
   const update = (i, patch) =>
     setQuestions(questions.map((q, j) => (j === i ? { ...q, ...patch } : q)))
@@ -24,7 +25,7 @@ export default function ReviewQuestions({ project, onStarted }) {
         .filter((q) => q.text.length >= 5)
       if (!clean.length) throw new Error('Add at least one question')
       await api.put(`/projects/${project.id}/questions`, { questions: clean })
-      await api.post(`/projects/${project.id}/start`)
+      await api.post(`/projects/${project.id}/start`, { engine_mode: mode })
       onStarted()
     } catch (e) {
       setError(e.message)
@@ -62,6 +63,28 @@ export default function ReviewQuestions({ project, onStarted }) {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+        <p className="mb-3 text-sm font-medium">Who answers these?</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            { key: 'auto', title: 'AnswerBank AI', blurb: "Our routed models. Hands-off, counts against your daily quota." },
+            { key: 'extension', title: 'Use my browser AI', blurb: 'ChatGPT / Claude / Gemini tabs you\'re signed into. Needs the extension. No quota.' },
+          ].map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => setMode(o.key)}
+              className={`rounded-lg border p-3 text-left transition ${
+                mode === o.key ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 hover:border-slate-500'
+              }`}
+            >
+              <span className="block text-sm font-medium">{o.title}</span>
+              <span className="mt-0.5 block text-xs text-slate-400">{o.blurb}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="mt-4 flex items-center justify-between">

@@ -21,6 +21,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
     password_hash: Mapped[str] = mapped_column(String(300))
+    # cached balance; CreditTxn is the source of truth and can always rebuild it
+    credits: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     projects: Mapped[list["Project"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -46,6 +48,11 @@ class Project(Base):
     source_filename: Mapped[str] = mapped_column(String(255), default="")
     raw_text: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    # who answers: "auto" = server API chain, "extension" = student's own browser AI tabs
+    engine_mode: Mapped[str] = mapped_column(String(20), default="auto")
+    # export paywall — unlocking is per question bank, so re-downloads are always free
+    unlocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    unlock_reason: Mapped[str] = mapped_column(String(20), default="")  # free | credit | grant
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     user: Mapped["User"] = relationship(back_populates="projects")
@@ -129,6 +136,46 @@ class UsageLedger(Base):
     day: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD (UTC)
     used: Mapped[int] = mapped_column(Integer, default=0)
     __table_args__ = (UniqueConstraint("user_id", "day"),)
+
+
+class CreditTxn(Base):
+    """Append-only credit ledger. Never edited — a correction is another row.
+    User.credits is a cache of the running total; `balance_after` lets us audit it."""
+    __tablename__ = "credit_txns"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    delta: Mapped[int] = mapped_column(Integer)                       # +bought, -spent
+    reason: Mapped[str] = mapped_column(String(20))                   # purchase | spend | grant | refund
+    ref: Mapped[str] = mapped_column(String(120), default="")         # project id / order id
+    balance_after: Mapped[int] = mapped_column(Integer)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class Order(Base):
+    """A credit purchase. Credits are granted only by the verified payment webhook,
+    never by the client claiming success."""
+    __tablename__ = "orders"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    credits: Mapped[int] = mapped_column(Integer)
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="created")  # created | paid | failed
+    provider: Mapped[str] = mapped_column(String(20), default="")        # razorpay | mock
+    provider_ref: Mapped[str] = mapped_column(String(120), default="", index=True)
+    pay_url: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class PairingCode(Base):
+    """Short-lived code shown in the web app and typed into the Chrome extension, so the
+    extension never handles the account password."""
+    __tablename__ = "pairing_codes"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), index=True)  # sha256 — the code itself is never stored
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class AuditLog(Base):
