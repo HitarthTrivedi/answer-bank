@@ -1,5 +1,14 @@
 # AnswerBank
 
+> **New to this repo? Read [HANDOVER.md](HANDOVER.md) first.**
+> It covers current status, what's left in priority order, and the design decisions that
+> look like bugs until you know why. This README explains the product; HANDOVER explains
+> the state it's in.
+>
+> **Current status: works end to end in mock mode, not yet launchable.** One blocker —
+> the Chrome extension has never been run against a live site
+> ([HANDOVER.md §5, P0-1](HANDOVER.md#5-whats-left)).
+
 **Question bank in → exam-ready answer document out.**
 
 Students upload a question bank from any source (PDF, DOCX, image, pasted text).
