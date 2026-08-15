@@ -174,3 +174,67 @@ def test_class_cache_second_user_gets_instant_answer(client, tokens):
     assert p["status"] == "done", p["counts"]
     engines = {q["answer"]["engine"] for q in p["questions"] if q["answer"]}
     assert engines == {"cache"}
+
+
+# ---------------- question splitting ----------------
+
+ANSWER_DOC = """Artificial Intelligence Question Bank
+
+Q1. Define AI. What are the task domains of AI? (10 marks)
+AI is the branch of computer science concerned with making computers behave like humans.
+
+Q2. Write the A* algorithm. (10 marks)
+A* is a best-first search algorithm. Algorithm Steps
+1. Place the starting node S on a list called OPEN, and set g(S)=0.
+2. If OPEN is empty, stop and return failure.
+3. Select the node n from OPEN with the smallest f(n).
+4. If n is a goal node, return the path.
+5. Otherwise expand n and go to step 2.
+
+Q3. Differentiate Hill Climbing and Best First Search. (5 marks)
+Hill climbing keeps only the current node; best-first keeps an OPEN list.
+"""
+
+
+def test_numbered_steps_inside_an_answer_are_not_mistaken_for_questions():
+    """The regression that produced 83 'questions' from a 27-question bank: every
+    algorithm step inside an answer starts with a number, exactly like a question."""
+    qs = extractor.heuristic_extract(ANSWER_DOC)
+    assert len(qs) == 3, [q["text"][:50] for q in qs]
+    assert qs[0]["marks"] == 10
+    assert qs[1]["text"].startswith("Write the A* algorithm")
+    # the algorithm steps belong to Q2, not to a question of their own
+    assert "Place the starting node" in qs[1]["text"]
+    assert qs[2]["text"].startswith("Differentiate Hill Climbing")
+
+
+PLAIN_BANK = """1. Define normalization in DBMS. (5 marks)
+2. Calculate the current through a 10 ohm resistor at 5V. (5 marks)
+3. Compare TCP and UDP. (10 marks)
+"""
+
+
+def test_a_plain_numbered_bank_still_splits_on_bare_numbers():
+    """With no Q markers anywhere, bare numbers ARE the question boundaries — the
+    fix for the answer-document case must not break the ordinary case."""
+    qs = extractor.heuristic_extract(PLAIN_BANK)
+    assert len(qs) == 3
+    assert qs[0]["text"].startswith("Define normalization")
+    assert [q["marks"] for q in qs] == [5, 5, 10]
+
+
+def test_candidates_are_offered_to_the_ai_without_the_document_body():
+    """Cost control. The model is shown candidate openings, never the document body, so
+    one upload is one small call whether the file is 2 KB or 200 KB."""
+    cands = extractor._candidates(ANSWER_DOC)
+    assert len(cands) == 8            # 3 questions + 5 algorithm steps
+    assert {c["kind"] for c in cands} == {"marker", "number"}
+
+    # the invariant that matters: prompt size tracks candidate COUNT, not file size
+    assert all(len(c["opening"]) <= extractor._PREVIEW_CHARS for c in cands)
+
+    padded = ANSWER_DOC + "\n" + ("filler prose that is not a question. " * 500)
+    same = extractor._candidates(padded)
+    assert len(same) == len(cands)
+    assert sum(len(c["opening"]) for c in same) == sum(len(c["opening"]) for c in cands), \
+        "a 20 KB document must cost the same prompt as a 700-byte one"

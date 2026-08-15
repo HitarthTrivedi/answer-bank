@@ -97,8 +97,9 @@ the whole run from its own page. Installing the extension is the entire setup.
 ### Core (v0.1)
 - Auth: scrypt passwords, JWT access + rotating opaque refresh tokens, rate limiting
 - Upload: magic-byte validation, PDF/DOCX/TXT/image text extraction
-- Question extraction (regex) with a **student review step before any answering starts** —
-  extraction is never silently trusted, so a miss costs one edit, not a wrong answer
+- **Question splitting**: regex finds every candidate boundary, then ONE AI call decides
+  which are real questions vs. steps inside an answer. A student review step follows, so a
+  miss costs one edit rather than a wrong answer.
 - **Router AI** (`services/router_agent.py`, model in `models.json`) → question type +
   which assistant answers it. Falls back to keywords with no key. The only model call.
 - Sequential worker; state in DB, so a restart resumes exactly where it stopped
@@ -290,6 +291,13 @@ their problem, not ours.
 reasoning tokens count against the completion budget (240–370 observed for a one-line
 classification). Set it too low and the model spends the whole allowance thinking, then
 returns empty content. Free models cost nothing, so there is no reason to be tight.
+
+**Splitting is regex + one AI call, in that order.** "1." starts a question and also
+starts every algorithm step inside an answer — pure regex turned a real 27-question bank
+into 83 fragments. The regex finds candidates (cheap, exhaustive); the model judges which
+are real (one small call, prompt sized by candidate count not file size). Don't "simplify"
+this by sending the document to the model — that's several calls per upload on a 50/day
+free tier.
 
 **Prefer text to pixels.** The reference answer document this style came from covers A*
 search, game trees and Bayesian networks across 23 pages with *zero* images — the data

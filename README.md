@@ -25,7 +25,7 @@ type, then exports everything as a polished DOCX with working, code, plots and d
 ## How it works
 
 ```
-upload → extract questions (regex) → student reviews/edits → queue:
+upload → split into questions → student reviews/edits → queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free, outranks everything below)
   │ ROUTER AI    ─ the one model we call. Picks the answer type
@@ -153,7 +153,7 @@ backend/
   app/routers/           auth, projects/questions/assist/export, billing, extension
   app/services/
     ingest.py            file validation + text extraction
-    extractor.py         raw text → questions (regex)
+    extractor.py         raw text → questions (regex finds candidates, AI picks the real ones)
     router_agent.py      THE routing AI — question → type + which assistant answers
     solver.py            prompt construction — the only lever on answer quality
     providers.py         one OpenAI-compatible client, used ONLY by the router

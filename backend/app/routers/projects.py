@@ -133,7 +133,7 @@ async def _run_extraction(project_id: str) -> None:
         if project is None:
             return
         try:
-            found = extractor.extract_questions(project.raw_text)
+            found = await extractor.extract_questions(project.raw_text)
             if not found:
                 project.status = "error"
                 project.error = ("No questions detected. Number them like '1.' / 'Q2)' "

@@ -46,5 +46,14 @@
         "max_completion_tokens": 1500
       }
     }
-  ]
+  ],
+  "extractor": {
+    "provider": "openrouter",
+    "model": "openrouter/free",
+    "json_mode": true,
+    "params": {
+      "max_tokens": 6000
+    }
+  },
+  "_extractor_note": "Splitting is ONE call per upload regardless of document size: the regex finds candidate boundaries, the model only says which are real questions. max_tokens is far higher than the router entry because openrouter/free often lands on a REASONING model, and judging 80+ candidates burns a lot of reasoning tokens before it emits the id list \u2014 starve it and you get empty content and a needless fall-through to the next model. Free either way."
 }
