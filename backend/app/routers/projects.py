@@ -16,7 +16,7 @@ from ..security import audit, client_ip, current_user
 from ..services import billing, cache, diagrams, export, extractor, ingest, solver, verify
 from ..services.queue import wake
 
-log = logging.getLogger("answerbank.projects")
+log = logging.getLogger("prism.projects")
 router = APIRouter(prefix="/api", tags=["projects"])
 
 # ---------------------------------------------------------------- helpers
@@ -47,7 +47,9 @@ def _question_dict(q: Question) -> dict:
     d = {
         "id": q.id, "idx": q.idx, "text": q.text, "marks": q.marks,
         "status": q.status, "qtype": q.qtype, "route_reason": q.route_reason,
-        "error": q.error, "assist_prompt": q.assist_prompt if q.status == "assist_waiting" else "",
+        "error": q.error, "target_site": q.target_site,
+        # still offered while a tab holds the lease, so a student can always paste by hand
+        "assist_prompt": q.assist_prompt if q.status in ("assist_waiting", "assist_running") else "",
         "answer": None,
     }
     if q.answer is not None:
@@ -220,6 +222,7 @@ def regenerate(question_id: str, user: User = Depends(current_user), db: Session
         db.query(AnswerCache).filter_by(qhash=ch).delete()
     q.status = "pending"
     q.assist_prompt = ""
+    q.leased_at = None
     q.error = ""
     q.project.status = "processing"
     db.commit()
@@ -252,7 +255,7 @@ def submit_assist(question_id: str, body: AssistSubmit,
                   user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Paste-back from the student's own ChatGPT/Claude tab."""
     q = _own_question(db, user, question_id)
-    if q.status != "assist_waiting":
+    if q.status not in ("assist_waiting", "assist_running"):
         raise HTTPException(409, "This question is not waiting for an assist answer")
 
     verified, note = (None, "")
@@ -266,6 +269,7 @@ def submit_assist(question_id: str, body: AssistSubmit,
                   provider="assist", model="student-supplied", verified=verified, verify_note=note))
     q.status = "answered"
     q.assist_prompt = ""
+    q.leased_at = None
     db.commit()
     db.refresh(q)  # reload the answer relationship so the response carries it
     cache.store(db, q.text, q.marks, q.qtype or "theory", content_md=body.content_md.strip(),

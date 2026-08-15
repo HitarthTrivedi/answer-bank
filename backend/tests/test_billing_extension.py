@@ -136,7 +136,71 @@ def test_cache_hits_skip_the_browser(client, auth):
 
 def test_extension_endpoints_require_auth(client):
     assert client.get("/api/extension/work").status_code == 401
+    assert client.get("/api/extension/batch").status_code == 401
     assert client.get("/api/extension/config").status_code == 401
+
+
+# ---------------- batching across assistants ----------------
+
+
+BIG_BANK = "".join(
+    f"{i}. Question number {i} about distributed systems and consensus. ({i} marks)\n"
+    for i in range(1, 10)
+)
+
+
+def test_a_batch_spreads_across_distinct_assistants(client, auth):
+    """The whole point: 3 questions go to 3 DIFFERENT AIs at once, so no single free
+    tier absorbs the entire bank."""
+    pid = _started_project(client, auth, "Batch Bank", text=BIG_BANK)
+
+    batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert len(batch) == 3
+    sites = [b["site"] for b in batch]
+    assert len(set(sites)) == 3, f"expected 3 distinct assistants, got {sites}"
+    assert all(b["prompt"] and "<question>" in b["prompt"] for b in batch)
+
+    # leased questions are not handed out twice
+    second = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert not ({b["question_id"] for b in batch} & {b["question_id"] for b in second})
+
+
+def test_a_batch_only_uses_assistants_the_student_is_signed_into(client, auth):
+    pid = _started_project(client, auth, "Excluded Bank", text=BIG_BANK)
+    res = client.get(f"/api/extension/batch?project_id={pid}&exclude=claude,gemini",
+                     headers=auth).json()
+    assert [b["site"] for b in res["batch"]] == ["chatgpt"]
+
+    res = client.get(f"/api/extension/batch?project_id={pid}&exclude=chatgpt,claude,gemini",
+                     headers=auth).json()
+    assert res["batch"] == [] and res["error"] == "no_sites_available"
+
+
+def test_a_dead_tab_does_not_strand_its_question(client, auth):
+    """A leased question whose tab was closed must come back to the pool, or the bank
+    could never finish."""
+    from app.services import queue
+    pid = _started_project(client, auth, "Lease Bank", text=BIG_BANK)
+    leased = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert leased
+
+    p = client.get(f"/api/projects/{pid}", headers=auth).json()
+    assert p["counts"].get("assist_running") == len(leased)
+
+    original, queue.LEASE_TTL_S = queue.LEASE_TTL_S, -1   # every lease is now overdue
+    try:
+        # earlier tests in this module also hold leases, so only the project matters here
+        assert queue.expire_leases() >= len(leased)
+    finally:
+        queue.LEASE_TTL_S = original
+
+    p = client.get(f"/api/projects/{pid}", headers=auth).json()
+    assert p["counts"].get("assist_running") is None
+    assert p["counts"]["assist_waiting"] == p["total"]      # all back in the pool
+
+    # and they can be handed out again
+    again = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert len(again) == 3
 
 
 def test_one_students_bank_is_invisible_to_another(client, auth):

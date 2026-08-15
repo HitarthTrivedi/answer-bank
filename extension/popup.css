@@ -14,11 +14,17 @@ body {
 }
 
 header {
-  display: flex; align-items: baseline; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between;
   padding: 13px 0 11px; border-bottom: 1px solid var(--line); margin-bottom: 13px;
 }
-.logo { font-weight: 700; font-size: 14px; }
-.logo b { color: #818cf8; font-weight: 700; }
+.logo { font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 7px; }
+/* a prism splitting one beam into a spectrum — the product, as a glyph */
+.mark {
+  width: 0; height: 0; flex: none;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-bottom: 12px solid #a78bfa;
+}
 .version { color: var(--dim); font-size: 11px; }
 
 .lead { color: var(--muted); margin: 0; }

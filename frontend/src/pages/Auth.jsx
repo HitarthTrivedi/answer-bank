@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
+import Wordmark from '../components/Wordmark'
 
 export default function Auth() {
   const [mode, setMode] = useState('login')
@@ -32,8 +33,8 @@ export default function Auth() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm">
-        <Link to="/" className="mb-8 block text-center text-xl font-bold">
-          Answer<span className="text-indigo-400">Bank</span>
+        <Link to="/" className="mb-8 flex justify-center">
+          <Wordmark size="lg" />
         </Link>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
           <div className="mb-5 grid grid-cols-2 rounded-lg bg-slate-800 p-1 text-sm">

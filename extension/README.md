@@ -1,15 +1,20 @@
-# AnswerBank Runner (Chrome extension)
+# Prism Runner (Chrome extension)
 
-**This extension is the engine.** The AnswerBank server calls no models at all — every
-answer comes from the AI tabs the student is already signed into (ChatGPT, Claude,
-Gemini). It is a robot doing exactly what a human would: take one prompt, paste it into a
-fresh chat, copy the answer back.
+**This extension is the engine.** The Prism server only *routes* — a small model
+decides which assistant suits each question — and every answer comes from the AI tabs the
+student is already signed into (ChatGPT, Claude, Gemini). The extension is a robot doing
+exactly what a human would: take one prompt, paste it into a fresh chat, copy the answer
+back.
+
+**Three at a time, on three different assistants.** Each batch opens one tab per site and
+answers them concurrently. That is both a speed win and the rate-limit strategy: 30
+questions become 10 each rather than 30 on one account.
 
 ## Install (development)
 
 1. `chrome://extensions` → turn on **Developer mode**
 2. **Load unpacked** → select this `extension/` folder
-3. Reload the AnswerBank tab. The header should read *Extension ready*.
+3. Reload the Prism tab. The header should read *Extension ready*.
 
 That is the whole setup. **There is nothing to connect and no code to type** —
 `content/bridge.js` runs on the app's own origin, so it reads the session the student is
@@ -21,20 +26,28 @@ questions, press **Answer with my AI**. The popup is a read-only status panel.
 ```
 app page          bridge.js         service worker              student's browser
 ────────          ─────────         ──────────────              ─────────────────
-"Answer with  ──► relays with  ──►  GET /extension/work
- my AI"           the session       {prompt, preferred_site}
-                                    open a FRESH chat tab ────► chatgpt.com / claude.ai
-                                    paste prompt, click send
-                                    poll until output stops
+"Answer with  ──► relays with  ──►  GET /extension/batch
+ my AI"           the session       3 questions, 3 DISTINCT sites
+                                        ├─ fresh tab ──────────► chatgpt.com
+                                        ├─ fresh tab ──────────► claude.ai
+                                        └─ fresh tab ──────────► gemini.google.com
+                                    all three answer at once
+                                    poll each until output stops
                                     DOM ──► markdown
-progress bar ◄─── relays back  ◄──  POST /questions/{id}/assist
+progress bar ◄─── relays back  ◄──  POST /questions/{id}/assist  ×3
+                                    → next batch of 3
 ```
 
 The bridge relays a fixed set of message types and nothing else — the page can ask the
 worker to start, stop or report, and cannot reach any other extension API through it.
 
 **A fresh chat per question, every time.** This costs a few seconds of navigation and is
-non-negotiable: 40 questions in one thread is the exact failure AnswerBank exists to fix.
+non-negotiable: 40 questions in one thread is the exact failure Prism exists to fix.
+Running three *assistants* in parallel is not the same thing as batching three questions
+into one thread — each still gets its own empty chat.
+
+**Leases stop double work.** The server marks a handed-out question `assist_running`; if
+a tab is closed mid-answer the lease expires and the question returns to the pool.
 
 **The extension holds nothing worth stealing.** No question bank (the server extracted
 it), no prompt templates (they live in `solver.py`), no document builder, no API keys.

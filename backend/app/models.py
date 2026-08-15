@@ -70,6 +70,9 @@ class Question(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending")
     qtype: Mapped[str] = mapped_column(String(20), default="")        # numerical|code|graph|diagram|theory
     route_reason: Mapped[str] = mapped_column(String(300), default="")
+    target_site: Mapped[str] = mapped_column(String(20), default="")  # which browser AI the router picked
+    # set when a batch is handed to the extension, so two tabs never get the same question
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     assist_prompt: Mapped[str] = mapped_column(Text, default="")      # set when waiting on manual paste-back
     error: Mapped[str] = mapped_column(Text, default="")
 

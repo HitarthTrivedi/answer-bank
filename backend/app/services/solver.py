@@ -1,6 +1,6 @@
 """Prompt construction. One question in, one prompt out — this module calls nothing.
 
-Every answer in AnswerBank comes from the student's own browser AI, so the prompt IS the
+Every answer in Prism comes from the student's own browser AI, so the prompt IS the
 product: it is the only lever we have over answer quality. The extension pastes it into
 a fresh chat, and a student pasting it by hand gets a byte-identical result.
 

@@ -12,14 +12,14 @@ from .security import RateLimitMiddleware, SecurityHeadersMiddleware
 from .services.queue import worker_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-log = logging.getLogger("answerbank")
+log = logging.getLogger("prism")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
     Base.metadata.create_all(engine)
-    migrate_columns()  # adds post-v0.1 columns to an existing answerbank.db
+    migrate_columns()  # adds post-v0.1 columns to an existing prism.db
     if s.secret_key.startswith("dev-insecure-change-me"):
         log.warning("SECRET_KEY is the dev default — set a real one in backend/.env before exposing this")
     if s.mock_payments:
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     worker.cancel()
 
 
-app = FastAPI(title="AnswerBank", version="0.1.0", lifespan=lifespan,
+app = FastAPI(title="Prism", version="0.1.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)  # no public API schema in prod posture
 
 # middleware order (outermost last): CORS must wrap everything so even 429s carry CORS headers

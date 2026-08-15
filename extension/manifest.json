@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AnswerBank Runner",
+  "name": "Prism Runner",
   "version": "0.2.0",
   "description": "Answers your question bank using the AI tabs you're already signed into.",
   "permissions": ["storage", "tabs"],
@@ -16,7 +16,7 @@
   "background": { "service_worker": "background.js" },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "AnswerBank Runner",
+    "default_title": "Prism Runner",
     "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
   },
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
@@ -33,7 +33,7 @@
       "run_at": "document_idle"
     },
     {
-      "_comment": "The AnswerBank app itself. Running here is what removes all setup: same origin as the app, so the extension reads the session the student is already signed in with. ADD YOUR PRODUCTION DOMAIN HERE when you deploy.",
+      "_comment": "The Prism app itself. Running here is what removes all setup: same origin as the app, so the extension reads the session the student is already signed in with. ADD YOUR PRODUCTION DOMAIN HERE when you deploy.",
       "matches": ["http://localhost:5173/*"],
       "js": ["content/bridge.js"],
       "run_at": "document_start"

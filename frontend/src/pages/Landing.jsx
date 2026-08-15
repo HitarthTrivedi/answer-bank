@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
+import Wordmark from '../components/Wordmark'
 
 const FEATURES = [
-  ['One question at a time', 'Dumping 40 questions into a chatbot ruins answers 25–40. AnswerBank solves each question individually, so the last answer is as strong as the first.'],
+  ['One question at a time', 'Dumping 40 questions into a chatbot ruins answers 25–40. Prism solves each question individually, so the last answer is as strong as the first.'],
   ['Routed to the right AI', 'A routing agent classifies every question — numericals, code, graphs, diagrams, theory — and sends it to the model that is best at that type.'],
   ['Verified numericals', 'Numerical answers are re-computed with a symbolic math engine. If the working doesn\'t match the final value, you see a warning, not a wrong answer.'],
   ['Real figures, not ASCII', 'Graphs are rendered as actual plots, diagrams as clean flowcharts, math as proper notation — on screen and in the exported document.'],
@@ -15,8 +16,8 @@ export default function Landing() {
   return (
     <div className="min-h-screen">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <div className="text-lg font-bold tracking-tight">
-          Answer<span className="text-indigo-400">Bank</span>
+        <div>
+          <Wordmark size="lg" tagline />
         </div>
         <Link
           to={user ? '/app' : '/auth'}
@@ -36,7 +37,7 @@ export default function Landing() {
           <span className="text-indigo-400">Exam-ready answer doc out.</span>
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-400">
-          Upload a question bank from any source. AnswerBank answers it one question at a
+          Upload a question bank from any source. Prism answers it one question at a
           time — each routed to the AI best suited for it — then hands you a polished
           document with working, code, graphs and diagrams.
         </p>
@@ -59,7 +60,7 @@ export default function Landing() {
       </section>
 
       <footer className="border-t border-slate-800 py-6 text-center text-xs text-slate-600">
-        AnswerBank · answers are AI-generated study aids — verify before you rely on them
+        Prism · answers are AI-generated study aids — verify before you rely on them
       </footer>
     </div>
   )

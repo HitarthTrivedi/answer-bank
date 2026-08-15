@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import Paywall from '../components/Paywall'
 import { isInstalled } from '../extension'
+import Wordmark from '../components/Wordmark'
 
 const STATUS_STYLE = {
   extracting: 'bg-amber-500/15 text-amber-400',
@@ -28,7 +29,7 @@ export default function Dashboard() {
     <div className="min-h-screen">
       <nav className="border-b border-slate-800">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link to="/" className="font-bold">Answer<span className="text-indigo-400">Bank</span></Link>
+          <Link to="/"><Wordmark /></Link>
           <div className="flex items-center gap-4 text-sm">
             {balance && (
               <button

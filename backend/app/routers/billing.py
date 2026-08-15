@@ -18,7 +18,7 @@ from ..models import CreditTxn, Order, User
 from ..security import audit, client_ip, current_user
 from ..services import billing, payments
 
-log = logging.getLogger("answerbank.billing")
+log = logging.getLogger("prism.billing")
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 
@@ -59,7 +59,7 @@ async def checkout(body: CheckoutIn, request: Request,
     try:
         ref, url = await payments.create_link(
             order.id, order.amount_paise,
-            f"AnswerBank — {pack['credits']} question bank credit(s)",
+            f"Prism — {pack['credits']} question bank credit(s)",
             user.email, user.name,
         )
     except payments.PaymentError as e:
@@ -152,5 +152,5 @@ def mock_pay(order_id: str, db: Session = Depends(get_db)):
  <h2>{'Already paid' if already else 'Payment successful'}</h2>
  <p><b>{order.credits} credit(s)</b> added — ₹{order.amount_paise // 100}</p>
  <p style="color:#64748b;font-size:13px">Mock gateway (MOCK_PAYMENTS=true). No money moved.</p>
- <p><a href="{s.payment_callback_url}">← Back to AnswerBank</a></p>
+ <p><a href="{s.payment_callback_url}">← Back to Prism</a></p>
 </div>""")

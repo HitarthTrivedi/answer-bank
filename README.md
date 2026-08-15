@@ -1,4 +1,6 @@
-# AnswerBank
+# Prism — for students
+
+*One question bank, split across every AI you're signed into.*
 
 > **New to this repo? Read [HANDOVER.md](HANDOVER.md) first.**
 > It covers current status, what's left in priority order, and the design decisions that
@@ -11,31 +13,41 @@
 
 **Question bank in → exam-ready answer document out.**
 
+A prism takes one beam and splits it into a spectrum. This one takes a question bank and
+fans it across ChatGPT, Claude and Gemini — each question going to whichever handles it
+best, three answering at a time.
+
 Students upload a question bank from any source (PDF, DOCX, image, pasted text).
-AnswerBank answers it **one question at a time** — because dumping 40 questions into a
+Prism answers it **one question at a time** — because dumping 40 questions into a
 chatbot ruins answers 25–40 — with each question routed to the AI best suited for its
 type, then exports everything as a polished DOCX with working, code, plots and diagrams.
 
 ## How it works
 
 ```
-upload → extract questions → student reviews/edits → sequential queue:
+upload → extract questions (regex) → student reviews/edits → queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free, outranks everything below)
-  │ router agent ─ classifies: numerical | code | graph | diagram | theory
-  │ else          ─ park the crafted prompt for the student's own AI
-  │                  → Chrome extension pastes it into a fresh ChatGPT/Claude/Gemini chat
-  │                  → or the student pastes it by hand
-  │ verify       ─ numericals re-computed with SymPy → ✓ / ⚠ badge
-  └ store → dashboard renders (KaTeX, highlighted code, mermaid, real plots)
+  │ ROUTER AI    ─ the one model we call. Picks the answer type
+  │                (numerical | code | graph | diagram | theory) AND which of the
+  │                student's browser AIs should write it. It never answers anything.
+  └ per batch of 3 ┘
+    extension opens 3 tabs on 3 DIFFERENT assistants, each its own fresh chat,
+    waits for all three, collects the answers → next 3
+    (or the student pastes any prompt by hand — same prompt, same result)
+  verify ─ numericals re-computed with SymPy → ✓ / ⚠ badge
+  store  → dashboard renders (KaTeX, highlighted code, mermaid, real plots)
 → DOCX export (cover, index, embedded figures, credits) ── 🔒 1 credit
 ```
 
 **Key design decisions**
-- **This server never calls a model.** There are no API keys in `.env` and no provider
-  code in the repo. Every answer comes from the student's own browser AI. What runs
-  server-side is deterministic: regex extraction, keyword routing, SymPy verification,
-  DOCX assembly.
+- **Our AI routes; their AI answers.** The server calls exactly one model, and only to
+  classify a question and pick which assistant should handle it — a few tokens on a free
+  tier. The expensive part, actually answering, runs on the student's own
+  ChatGPT/Claude/Gemini subscription. With no key at all, routing falls back to keywords.
+- **Three at a time, across three assistants.** A batch is always spread over distinct
+  AIs. 30 questions become 10 each rather than 30 on one account, so nobody's free
+  message cap runs out mid-run — and the bank finishes ~3× faster.
 - **One prompt contract.** The extension and a student pasting by hand use the *same*
   crafted prompt, so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
@@ -107,11 +119,14 @@ to paste into any AI tab by hand.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-21 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+24 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
 the full pipeline with a stand-in for the browser (`tests/helpers.py`), proof that no
 question is ever answered server-side, the export paywall (free bank → 402 → paid unlock
-→ free re-download), webhook signature + replay safety, and cross-account isolation.
+→ free re-download), webhook signature + replay safety, cross-account isolation, and the
+batching guarantees: a batch spans three distinct assistants, never hands the same
+question to two tabs, honours `?exclude=` for AIs you aren't signed into, and returns a
+dead tab's question to the pool.
 
 ```bash
 cd extension && npm install && npm test    # 10 tests: the HTML → markdown converter
@@ -122,16 +137,17 @@ cd extension && npm install && npm test    # 10 tests: the HTML → markdown con
 ```
 backend/
   app/main.py            FastAPI app, middleware, lifespan (starts the worker)
-  app/config.py          settings (.env) — limits, billing (no AI keys; there is no AI here)
+  app/config.py          settings (.env) — limits, billing, the router's key
   app/models.py          SQLAlchemy schema (users, projects, questions, answers,
                          cache, usage ledger, audit log)
   app/security.py        scrypt, JWT, refresh rotation, rate limit, headers
   app/routers/           auth, projects/questions/assist/export, billing, extension
   app/services/
     ingest.py            file validation + text extraction
-    extractor.py         raw text → questions (regex — no model)
-    router_agent.py      question → type classification (keywords — no model)
+    extractor.py         raw text → questions (regex)
+    router_agent.py      THE routing AI — question → type + which assistant answers
     solver.py            prompt construction — the only lever on answer quality
+    providers.py         one OpenAI-compatible client, used ONLY by the router
     verify.py            SymPy numerical re-computation (allowlisted)
     diagrams.py          graphspec → matplotlib PNG, mathtext renderer
     cache.py             class-wide answer cache
@@ -139,7 +155,8 @@ backend/
     export.py            markdown → DOCX (figures embedded)
     billing.py           credit ledger + the export paywall
     payments.py          Razorpay payment links + mock gateway
-  extension_selectors.json  DOM contract for the extension — the site-redesign hotfix channel
+  models.json            the router model (the only place a model is named)
+  extension_selectors.json  DOM contract + per-site strengths + batch size
 frontend/                Vite + React + Tailwind dashboard
 extension/               Chrome MV3 extension (see its own README)
 sample_question_bank.txt demo input covering all five question types

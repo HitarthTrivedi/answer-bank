@@ -1,4 +1,4 @@
-# AnswerBank — Security Audit (v0.1)
+# Prism — Security Audit (v0.1)
 
 Scope: the whole codebase as of this audit. Format: what's implemented (with file
 references), what's deliberately deferred, and what to do before public deployment.

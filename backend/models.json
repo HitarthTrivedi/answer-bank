@@ -1,0 +1,8 @@
+{
+  "_comment": "The ONE model Prism calls. It routes, it never answers — it reads a question and decides which of the student's browser AIs is best placed to answer it. Keep it small and cheap: this is a classification job, not a reasoning job. With no key configured, routing falls back to keywords and the product still works. Free-tier model IDs rotate; verify before changing.",
+  "router": { "provider": "google", "model": "gemma-4-31b-it" },
+  "router_fallbacks": [
+    { "provider": "groq", "model": "llama-3.3-70b-versatile" },
+    { "provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free" }
+  ]
+}

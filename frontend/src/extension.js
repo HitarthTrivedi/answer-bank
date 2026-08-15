@@ -1,4 +1,4 @@
-// Talks to the AnswerBank Chrome extension from the page.
+// Talks to the Prism Chrome extension from the page.
 //
 // The extension's content script (content/bridge.js) runs on this origin and relays to
 // its service worker. That's the whole reason there's no pairing step: the extension
@@ -7,13 +7,13 @@
 
 import { tokens } from './api'
 
-const TAG = 'answerbank'
+const TAG = 'prism'
 let seq = 0
 
 /** Installed? The bridge stamps the <html> element at document_start, so this is
  *  synchronous and safe to call during render. */
 export function extensionVersion() {
-  return document.documentElement.getAttribute('data-answerbank-ext')
+  return document.documentElement.getAttribute('data-prism-ext')
 }
 
 export const isInstalled = () => !!extensionVersion()

@@ -4,20 +4,22 @@ A single global asyncio loop drains projects in `processing` status question by
 question: cache → route → hand to the browser. Sequential on purpose: it maximizes
 per-answer quality and makes progress legible.
 
-This server never answers anything itself. Every question that isn't already in the
-class cache is parked as `assist_waiting` with a crafted prompt, and the student's own
-AI — driven by the Chrome extension, or pasted by hand — produces the answer.
+This server never *answers* anything. It routes: a small model reads each question,
+decides what kind of answer it needs and which of the student's browser AIs is best
+placed to write it. The question is then parked as `assist_waiting` with a crafted
+prompt, and the extension (or a student pasting by hand) produces the answer.
 
 State lives in the DB, so a restart resumes exactly where it stopped.
 """
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from ..db import SessionLocal
 from ..models import Answer, Project, Question
 from . import cache, router_agent, solver
 
-log = logging.getLogger("answerbank.queue")
+log = logging.getLogger("prism.queue")
 
 _wake = asyncio.Event()
 
@@ -44,12 +46,39 @@ async def worker_loop() -> None:
             _wake.clear()
 
 
+# question lifecycle:
+#   pending -> answering (server routing it, brief)
+#           -> assist_waiting (routed, waiting for a browser tab)
+#           -> assist_running (leased to a specific tab right now)
+#           -> answered | error
+LEASE_TTL_S = 600
+
+
 def _requeue_stale() -> None:
-    """After a crash/restart, questions stuck in 'answering' go back to 'pending'."""
+    """After a crash/restart, un-stick anything that was mid-flight."""
     db = SessionLocal()
     try:
         db.query(Question).filter_by(status="answering").update({"status": "pending"})
+        db.query(Question).filter_by(status="assist_running").update(
+            {"status": "assist_waiting", "leased_at": None})
         db.commit()
+    finally:
+        db.close()
+
+
+def expire_leases() -> int:
+    """A tab that was closed mid-answer would strand its question forever. Anything held
+    longer than the lease goes back in the pool for the next batch."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=LEASE_TTL_S)
+    db = SessionLocal()
+    try:
+        n = (db.query(Question)
+             .filter(Question.status == "assist_running", Question.leased_at < cutoff)
+             .update({"status": "assist_waiting", "leased_at": None}, synchronize_session=False))
+        if n:
+            db.commit()
+            log.info("expired %s stale answer lease(s)", n)
+        return n
     finally:
         db.close()
 
@@ -66,6 +95,7 @@ async def _process_next() -> bool:
             .first()
         )
         if q is None:
+            expire_leases()
             _finalize_done_projects(db)
             return False
 
@@ -73,7 +103,7 @@ async def _process_next() -> bool:
         db.commit()
 
         try:
-            _route_question(db, q)
+            await _route_question(db, q)
         except Exception as e:
             log.exception("question %s failed", q.id)
             q.status = "error"
@@ -85,11 +115,13 @@ async def _process_next() -> bool:
         db.close()
 
 
-def _route_question(db, q: Question) -> None:
-    # 1. classify (skip if a regenerate already fixed the type)
+async def _route_question(db, q: Question) -> None:
+    # 1. route: what kind of answer, and which browser AI should write it
     if not q.qtype:
-        route = router_agent.classify(q.text)
-        q.qtype, q.route_reason = route["qtype"], route["reason"]
+        route = await router_agent.classify(q.text)
+        q.qtype = route["qtype"]
+        q.route_reason = route["reason"]
+        q.target_site = route["site"]
         db.commit()
 
     # 2. class cache — free, instant, and it outranks the browser: a question the class
@@ -124,7 +156,7 @@ def _finalize_done_projects(db) -> None:
     it flips to done when those answers come back."""
     for project in db.query(Project).filter_by(status="processing").all():
         states = {qq.status for qq in project.questions}
-        if states & {"pending", "answering", "assist_waiting"}:
+        if states & {"pending", "answering", "assist_waiting", "assist_running"}:
             continue
         project.status = "done"
         db.commit()

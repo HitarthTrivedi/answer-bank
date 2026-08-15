@@ -1,9 +1,9 @@
 """Central settings. Everything tunable lives in .env — no magic numbers in code.
 
-Note what is NOT here: there are no AI provider keys. This server never calls a model.
-Every answer comes from the student's own browser AI via the Chrome extension; the only
-"intelligence" running server-side is deterministic (regex extraction, keyword routing,
-SymPy verification).
+The only model this server calls is the ROUTER: it reads a question and decides which of
+the student's browser AIs should answer it. It never writes an answer, so these keys buy
+a few tokens per question, not inference. With no keys at all, routing falls back to
+keywords and the product still works.
 """
 import json
 from functools import lru_cache
@@ -23,12 +23,20 @@ class Settings(BaseSettings):
 
     # --- server ---
     frontend_origin: str = "http://localhost:5173"
-    database_url: str = f"sqlite:///{DATA_DIR / 'answerbank.db'}"
+    database_url: str = f"sqlite:///{DATA_DIR / 'prism.db'}"
 
     # --- uploads ---
     max_upload_mb: int = 15
     allowed_extensions: str = "pdf,docx,txt,md,png,jpg,jpeg"
     max_questions_per_bank: int = 200
+
+    # --- routing model (optional; keyword fallback if absent) ---
+    google_api_key: str = ""
+    groq_api_key: str = ""
+    openrouter_api_key: str = ""
+    mock_llm: bool = False                  # deterministic canned routing for dev/demo/tests
+    provider_min_interval_s: float = 1.0    # pacing per provider (routing calls are tiny)
+    llm_timeout_s: float = 30.0
 
     # --- features ---
     class_cache: bool = True                # share answers for identical questions across users
@@ -63,6 +71,14 @@ def get_settings() -> Settings:
     (DATA_DIR / "uploads").mkdir(exist_ok=True)
     (DATA_DIR / "assets").mkdir(exist_ok=True)
     return s
+
+
+@lru_cache
+def get_model_config() -> dict:
+    """The router model and its fallbacks. Edit backend/models.json — never hardcode
+    model strings in code."""
+    with open(BASE_DIR / "models.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 @lru_cache

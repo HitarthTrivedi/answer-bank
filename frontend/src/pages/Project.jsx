@@ -6,6 +6,7 @@ import ExtensionNeeded from '../components/ExtensionNeeded'
 import Paywall from '../components/Paywall'
 import ReviewQuestions from '../components/ReviewQuestions'
 import { isInstalled, onProgress, startRun, stopRun } from '../extension'
+import Wordmark from '../components/Wordmark'
 
 export default function Project() {
   const { id } = useParams()
@@ -158,8 +159,22 @@ export default function Project() {
                   <span className="font-semibold">Answering in your browser…</span>{' '}
                   {run.message}
                 </p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Each question gets a fresh chat. Leave this browser open.
+                {run.active?.length > 1 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {run.active.map((a) => (
+                      <span
+                        key={a.idx}
+                        className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300"
+                      >
+                        <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400 align-middle" />
+                        Q{a.idx} · {a.site}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-2 text-xs text-slate-500">
+                  Each question gets its own fresh chat, spread across your AIs so none
+                  hits its limit. Leave this browser open.
                 </p>
               </div>
               <button
@@ -218,7 +233,7 @@ function Shell({ children }) {
       <nav className="border-b border-slate-800">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
           <Link to="/app" className="text-sm text-slate-400 hover:text-slate-200">← All question banks</Link>
-          <Link to="/" className="font-bold">Answer<span className="text-indigo-400">Bank</span></Link>
+          <Link to="/"><Wordmark /></Link>
         </div>
       </nav>
       <main className="mx-auto max-w-4xl px-6 py-8">{children}</main>

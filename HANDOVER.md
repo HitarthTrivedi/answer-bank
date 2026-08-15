@@ -1,4 +1,4 @@
-# AnswerBank — Handover
+# Prism (for students) — Handover
 
 Read this first. It covers what works, what doesn't, what's deliberately the way it is,
 and what to do next in priority order.
@@ -10,15 +10,20 @@ and what to do next in priority order.
 
 ## 1. What it is
 
-Students upload a question bank (PDF / DOCX / image / pasted text). AnswerBank answers it
+Students upload a question bank (PDF / DOCX / image / pasted text). Prism answers it
 **one question at a time** — because dumping 40 questions into a chatbot ruins answers
 25–40 — routing each question to the AI best suited to its type, then exports the lot as a
 polished DOCX with working, code, plots and diagrams.
 
-**The server never calls a model.** There are no AI keys and no provider code. Every
-answer is produced by the student's own ChatGPT / Claude / Gemini session, driven by the
-Chrome extension. What runs server-side is deterministic: regex extraction, keyword
-routing, SymPy verification, DOCX assembly.
+**Our AI routes; their AI answers.** The server calls exactly one model — the router —
+and it never writes an answer. It reads a question, decides what kind of answer it needs,
+and picks which of the student's browser AIs should write it. That is a handful of tokens
+on a free tier, so it stays cheap at any volume. Every actual answer comes from the
+student's own ChatGPT / Claude / Gemini session, driven by the Chrome extension.
+
+**Questions run three at a time across three different assistants.** This is what stops
+any one account hitting its free message cap — 30 questions become 10 each — and it cuts
+wall-clock time by roughly the batch size.
 
 **Business model:** answering is free, the DOCX download costs ₹20 (1 credit). First bank
 free. See §6.
@@ -59,14 +64,17 @@ cd extension && npm install && npm test              # 10 tests
 ## 3. How it works
 
 ```
-upload → extract questions (regex) → student reviews/edits → sequential queue:
+upload → extract questions (regex) → student reviews/edits → queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free; outranks everything below)
-  │ router agent ─ keyword classify: numerical | code | graph | diagram | theory
+  │ ROUTER AI    ─ the only model we call. qtype + which assistant answers. Never answers.
   │ else         ─ park the crafted prompt as `assist_waiting`
-  │                  → extension opens a FRESH ChatGPT/Claude/Gemini chat, pastes it,
-  │                    reads the reply back, posts it to /assist
-  │                  → or the student pastes it by hand — same prompt, same result
+  └ per batch of 3 ┘
+    GET /extension/batch leases 3 questions on 3 DISTINCT assistants
+      → extension opens 3 tabs, each a FRESH chat, sends all three
+      → waits for all three (~3 min), scrapes each, POSTs to /assist
+      → next 3
+    (or the student pastes any of them by hand — same prompt, same result)
   │ verify       ─ numericals re-computed with SymPy → ✓ / ⚠ badge
   └ store → dashboard renders (KaTeX, code, mermaid, real plots)
 → DOCX export (cover, index, embedded figures) ── 🔒 1 credit
@@ -91,7 +99,8 @@ the whole run from its own page. Installing the extension is the entire setup.
 - Upload: magic-byte validation, PDF/DOCX/TXT/image text extraction
 - Question extraction (regex) with a **student review step before any answering starts** —
   extraction is never silently trusted, so a miss costs one edit, not a wrong answer
-- Router agent → 5 question types, deciding prompt shape and target site
+- **Router AI** (`services/router_agent.py`, model in `models.json`) → question type +
+  which assistant answers it. Falls back to keywords with no key. The only model call.
 - Sequential worker; state in DB, so a restart resumes exactly where it stopped
 - SymPy re-computation of numericals → verified ✓ / check-working ⚠ badge
 - Class cache: identical questions answered once, served to every classmate
@@ -114,9 +123,13 @@ the whole run from its own page. Installing the extension is the entire setup.
 - **Zero-setup pairing.** `content/bridge.js` runs on the app's own origin, so the
   extension reads the existing session — no pairing code, no second login, no popup to
   visit. The app drives the run and shows live progress on its own page.
-- **The server AI is gone.** No provider code, no `models.json`, no API keys, no quota.
-  Extraction and routing are deterministic; `solver.py` only builds prompts now. If you
-  need the old provider chain, it is in git history at `4247259`.
+- **The server no longer answers.** `solver.py` only builds prompts; the solver chain is
+  gone. The router survives as the one model call. Extraction is regex-only.
+- **Batching across assistants.** `GET /api/extension/batch` leases 3 questions on 3
+  distinct sites; the extension answers them concurrently. Leases (`assist_running` +
+  `leased_at`) stop two tabs taking the same question, and `queue.expire_leases()` returns
+  a question to the pool if its tab dies. `?exclude=` lets the extension tell the server
+  which assistants the student isn't signed into.
 - **Server-side DOM selectors** (`backend/extension_selectors.json`) served at
   `/api/extension/config` — the site-redesign hotfix channel (§7).
 - **Buyer's name on the DOCX cover** — mild anti-forwarding friction, not DRM.
@@ -218,9 +231,14 @@ Two tests enforce this. Do not add a "mark as paid" endpoint.
 product — 40 questions in one thread is the exact failure this exists to fix. The
 extension navigates to a new chat before every prompt for this reason.
 
-**No server-side AI, deliberately.** Answers come only from the student's own browser
-session. Don't "helpfully" add an API fallback for questions the extension fails on —
-they stay `assist_waiting` on purpose, visible in the app for a manual paste.
+**The router routes, it never answers.** It exists so questions reach the right
+assistant cheaply. Don't grow it into a solver — the moment the server answers anything,
+the economics and the whole product story change. Questions the extension fails on stay
+`assist_waiting` on purpose, visible in the app for a manual paste.
+
+**A batch always spans distinct assistants.** Not an optimisation — it's the rate-limit
+strategy. If you change `batch_size` in `extension_selectors.json`, it is still capped by
+how many sites exist, because one tab per site is the point.
 
 **The extension has no settings screen.** Which AI sites are usable is discovered by
 trying: a site that reports "not signed in" is dropped for the rest of the run and the

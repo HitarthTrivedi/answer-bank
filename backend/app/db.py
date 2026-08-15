@@ -33,12 +33,16 @@ def get_db():
 
 
 # Columns added after v0.1 shipped. create_all() only creates missing *tables*, so an
-# existing answerbank.db needs these added by hand. Idempotent — safe on every boot.
+# existing prism.db needs these added by hand. Idempotent — safe on every boot.
 _ADDED_COLUMNS = {
     "users": [("credits", "INTEGER NOT NULL DEFAULT 0")],
     "projects": [
         ("unlocked", "BOOLEAN NOT NULL DEFAULT 0"),
         ("unlock_reason", "VARCHAR(20) NOT NULL DEFAULT ''"),
+    ],
+    "questions": [
+        ("target_site", "VARCHAR(20) NOT NULL DEFAULT ''"),
+        ("leased_at", "DATETIME"),
     ],
 }
 

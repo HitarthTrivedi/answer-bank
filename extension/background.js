@@ -1,9 +1,15 @@
 // Orchestrator. Owns the run loop, the API session, and all the timers.
 //
-// The loop mirrors the server's worker exactly: one question at a time, fresh chat per
-// question. That second part is not an implementation detail — it IS the product. Forty
-// questions pasted into one thread is precisely the failure AnswerBank exists to fix, so
-// we navigate to a new chat before every single prompt even though it costs a few seconds.
+// Work arrives in batches spread across DIFFERENT assistants: three questions, three
+// tabs, three AIs answering simultaneously. Two reasons, and the second matters more:
+//
+//   1. wall-clock — three answers per ~3 minutes instead of one;
+//   2. rate limits — a 30-question bank becomes 10 each rather than 30 on one account,
+//      so nobody's free message cap runs out mid-run.
+//
+// Every question still gets its own brand-new chat. Parallel across assistants is not
+// the same thing as batching questions into one thread, which is the exact failure this
+// product exists to fix — so we navigate to a fresh chat before every prompt.
 //
 // The session arrives from the app's own page via content/bridge.js, so there is nothing
 // to pair and nothing to log into twice.
@@ -19,10 +25,11 @@ const state = {
   message: '',
   errors: [],
   sitesUsed: [],
+  active: [],   // what each tab is working on right now, for the app's progress panel
 }
 
 let session = null  // {apiBase, access, refresh} — pushed by the app page
-let appTabId = null // the AnswerBank tab that started the run, so progress goes back to it
+let appTabId = null // the Prism tab that started the run, so progress goes back to it
 
 // ---------------------------------------------------------------- plumbing
 
@@ -120,17 +127,10 @@ async function freshChatTab(site) {
 
 // ---------------------------------------------------------------- the run loop
 
-/** Lazily learned during a run: sites the student turns out not to be signed into.
- *  No settings screen, no checkboxes — we find out by trying. */
+/** Lazily learned during a run: sites the student turns out not to be signed into. No
+ *  settings screen, no checkboxes — we find out by trying, then tell the server to stop
+ *  assigning work to them via ?exclude=. */
 const unavailable = new Set()
-
-function chooseSite(cfg, preferred) {
-  const order = [preferred, ...Object.keys(cfg.sites)]
-  for (const key of order) {
-    if (cfg.sites[key] && !unavailable.has(key)) return { key, ...cfg.sites[key] }
-  }
-  return null
-}
 
 async function waitForAnswer(tabId, cfg, site) {
   const deadline = Date.now() + (cfg.max_wait_s || 300) * 1000
@@ -163,59 +163,82 @@ async function waitForAnswer(tabId, cfg, site) {
   throw new Error('timed_out_waiting_for_answer')
 }
 
+/** Answer one question start-to-finish in its own fresh chat. */
+async function answerOne(item, cfg, sites) {
+  const site = { key: item.site, ...sites[item.site] }
+  const tab = await freshChatTab(site)
+  const sent = await tell(tab.id, { type: 'AB_SEND', text: item.prompt, site })
+  if (!sent.ok) throw new Error(sent.error)
+
+  const markdown = await waitForAnswer(tab.id, cfg, site)
+  if (!markdown || markdown.length < 10) throw new Error('empty_answer')
+
+  await apiFetch(`/questions/${item.question_id}/assist`, {
+    method: 'POST', body: { content_md: markdown },
+  })
+  return site
+}
+
 async function runLoop() {
   const cfg = await apiFetch('/extension/config')
   unavailable.clear()
   state.sitesUsed = []
 
   while (state.running && !state.stopRequested) {
-    const work = await apiFetch(`/extension/work?project_id=${encodeURIComponent(state.projectId)}`)
-    if (work.done) { setStatus('finished', 'All questions answered'); break }
+    const exclude = [...unavailable].join(',')
+    const res = await apiFetch(
+      `/extension/batch?project_id=${encodeURIComponent(state.projectId)}` +
+      (exclude ? `&exclude=${encodeURIComponent(exclude)}` : ''))
 
-    state.total = work.total
-    state.done = work.total - work.waiting
-    state.projectTitle = work.project_title
-
-    const site = chooseSite(cfg, work.preferred_site)
-    if (!site) {
+    if (res.error === 'no_sites_available') {
       throw new Error("You're not signed in to ChatGPT, Claude or Gemini in this browser. " +
                       'Sign in to any one of them and press Start again.')
     }
+    if (res.done || !res.batch.length) { setStatus('finished', 'All questions answered'); break }
 
-    setStatus('running', `Question ${work.idx} of ${work.total} → ${site.label}`)
+    const batch = res.batch
+    state.total = batch[0].total
+    state.projectTitle = batch[0].project_title
+    state.done = state.total - res.waiting - batch.length
+    state.active = batch.map((b) => ({ idx: b.idx, site: cfg.sites[b.site].label }))
+    setStatus('running', batch.length === 1
+      ? `Question ${batch[0].idx} of ${state.total} → ${cfg.sites[batch[0].site].label}`
+      : `Questions ${batch.map((b) => b.idx).join(', ')} of ${state.total} — ` +
+        `${batch.map((b) => cfg.sites[b.site].label).join(', ')} answering together`)
 
-    try {
-      const tab = await freshChatTab(site)
-      const sent = await tell(tab.id, { type: 'AB_SEND', text: work.prompt, site })
-      if (!sent.ok) throw new Error(sent.error)
+    // all three run at once; Promise.allSettled so one bad tab can't sink the batch
+    const results = await Promise.allSettled(batch.map((item) => answerOne(item, cfg, cfg.sites)))
 
-      const markdown = await waitForAnswer(tab.id, cfg, site)
-      if (!markdown || markdown.length < 10) throw new Error('empty_answer')
-
-      await apiFetch(`/questions/${work.question_id}/assist`, {
-        method: 'POST', body: { content_md: markdown },
-      })
-      state.done += 1
-      if (!state.sitesUsed.includes(site.label)) state.sitesUsed.push(site.label)
-      broadcast()
-    } catch (e) {
-      const msg = String(e.message || e)
-      if (msg === 'stopped') break
-
-      // Not signed in to this one? Stop trying it and let the next question pick another.
-      if (msg.startsWith('not_signed_in:')) {
-        unavailable.add(msg.split(':')[1])
-        setStatus('running', `Not signed in to ${site.label} — trying another`)
-        continue
+    let progressed = false
+    results.forEach((r, i) => {
+      const item = batch[i]
+      if (r.status === 'fulfilled') {
+        state.done += 1
+        progressed = true
+        const label = cfg.sites[item.site].label
+        if (!state.sitesUsed.includes(label)) state.sitesUsed.push(label)
+        return
       }
+      const msg = String(r.reason && r.reason.message ? r.reason.message : r.reason)
+      if (msg.startsWith('not_signed_in:')) {
+        // drop that assistant for the rest of the run; its questions go back in the pool
+        // when the lease expires, and the next batch routes them elsewhere
+        unavailable.add(msg.split(':')[1])
+        return
+      }
+      if (msg !== 'stopped') state.errors.push({ q: item.idx, error: msg })
+    })
 
-      state.errors.push({ q: work.idx, error: msg })
-      setStatus('running', `Question ${work.idx} failed — skipping`)
-      // A failed question stays assist_waiting, so it's still visible in the app for a
-      // manual paste. We move on rather than blocking a whole run on one bad DOM.
-      if (state.errors.length >= 5) throw new Error('Too many questions failed in a row.')
-      await sleep(1500)
+    state.active = []
+    broadcast()
+
+    if (state.stopRequested) break
+    // nothing landed and nothing to retry with → stop rather than spin
+    if (!progressed && unavailable.size >= Object.keys(cfg.sites).length) {
+      throw new Error('None of your AI tabs could answer. Check you are signed in.')
     }
+    if (state.errors.length >= 5) throw new Error('Too many questions failed.')
+    if (!progressed) await sleep(1500)
   }
 }
 
@@ -223,7 +246,7 @@ async function start(projectId) {
   if (state.running) return
   Object.assign(state, {
     running: true, stopRequested: false, projectId,
-    done: 0, total: 0, errors: [], sitesUsed: [], status: 'running', message: 'Starting…',
+    done: 0, total: 0, errors: [], sitesUsed: [], active: [], status: 'running', message: 'Starting…',
   })
   broadcast()
   try {

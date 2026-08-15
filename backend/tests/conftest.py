@@ -6,8 +6,10 @@ here, before any test module is imported, and everyone shares one client.
 """
 import os
 
+os.environ["MOCK_LLM"] = "true"        # canned ROUTING decisions (never answers)
 os.environ["MOCK_PAYMENTS"] = "true"
-os.environ["DATABASE_URL"] = "sqlite:///./test_answerbank.db"
+os.environ["PROVIDER_MIN_INTERVAL_S"] = "0"
+os.environ["DATABASE_URL"] = "sqlite:///./test_prism.db"
 os.environ["FREE_BANKS"] = "1"
 
 import pytest  # noqa: E402
@@ -15,7 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 
-_DB_FILES = ("test_answerbank.db", "test_answerbank.db-wal", "test_answerbank.db-shm")
+_DB_FILES = ("test_prism.db", "test_prism.db-wal", "test_prism.db-shm")
 
 
 @pytest.fixture(scope="session")

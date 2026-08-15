@@ -15,7 +15,7 @@ import httpx
 
 from ..config import get_settings
 
-log = logging.getLogger("answerbank.payments")
+log = logging.getLogger("prism.payments")
 
 _API = "https://api.razorpay.com/v1/payment_links"
 _TIMEOUT = 20.0

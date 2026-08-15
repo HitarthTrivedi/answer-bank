@@ -1,4 +1,4 @@
-// Rendered AI answer (DOM) -> the markdown dialect AnswerBank's exporter understands.
+// Rendered AI answer (DOM) -> the markdown dialect Prism's exporter understands.
 //
 // This is the quality-critical piece. A naive innerText scrape loses exactly the things
 // that make an answer document worth paying for: LaTeX becomes unicode soup, code loses

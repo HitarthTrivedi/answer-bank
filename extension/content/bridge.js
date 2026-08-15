@@ -1,4 +1,4 @@
-// Runs on the AnswerBank web app's own origin. This file is why there is no setup.
+// Runs on the Prism web app's own origin. This file is why there is no setup.
 //
 // Because it shares an origin with the app, it can read the session the student is
 // already signed in with — no pairing code, no second login, nothing to type. And it
@@ -12,11 +12,11 @@
 // to start, stop or report; it can't reach any other extension API through here.
 
 const ALLOWED = new Set(['AB_PING', 'AB_START', 'AB_STOP', 'AB_STATUS'])
-const TAG = 'answerbank'
+const TAG = 'prism'
 
 // Synchronous marker so the app can tell "installed" from "not installed" on first
 // paint, without waiting for a round trip.
-document.documentElement.setAttribute('data-answerbank-ext', chrome.runtime.getManifest().version)
+document.documentElement.setAttribute('data-prism-ext', chrome.runtime.getManifest().version)
 
 window.addEventListener('message', (event) => {
   // only this page, in this window — never a frame or another origin
