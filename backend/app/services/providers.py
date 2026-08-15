@@ -46,10 +46,15 @@ class LLMError(Exception):
 
 
 async def chat(provider: str, model: str, messages: list[dict],
-               json_mode: bool = False, params: dict | None = None) -> str:
+               json_mode: bool = False, params: dict | None = None,
+               models: list[str] | None = None) -> str:
     """`params` carries model-specific extras from models.json (e.g. gpt-oss takes
     `reasoning_effort`). If the endpoint rejects them we retry once with a plain body,
-    so a model that doesn't know a knob degrades instead of failing the run."""
+    so a model that doesn't know a knob degrades instead of failing the run.
+
+    `models` is OpenRouter's ordered fallback list: it walks the list inside a single
+    request, so a free model that is down or rate-limited costs milliseconds instead of
+    a failed routing call."""
     s = get_settings()
     if s.mock_llm:
         return _mock_routing_response(messages)
@@ -65,17 +70,25 @@ async def chat(provider: str, model: str, messages: list[dict],
         _last_call[provider] = time.monotonic()
 
     base: dict = {"model": model, "messages": messages, "temperature": 0.0}
+    if models and provider == "openrouter":
+        base["models"] = models          # OpenRouter walks these in order, server-side
     rich = dict(base, **(params or {}))
     if json_mode:
         rich["response_format"] = {"type": "json_object"}
 
     body = rich
+    headers = {"Authorization": f"Bearer {key}"}
+    if provider == "openrouter":
+        # OpenRouter asks callers to identify themselves; it also unlocks better
+        # rate-limit treatment than an anonymous client gets.
+        headers["HTTP-Referer"] = "https://github.com/HitarthTrivedi/answer-bank"
+        headers["X-Title"] = "Prism"
     async with httpx.AsyncClient(timeout=s.llm_timeout_s) as client:
         for attempt in range(3):
             try:
                 r = await client.post(
                     f"{BASES[provider]}/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
+                    headers=headers,
                     json=body,
                 )
                 if r.status_code == 400 and body is rich:
@@ -85,7 +98,12 @@ async def chat(provider: str, model: str, messages: list[dict],
                                 provider, model, r.text[:160])
                     body = base
                     continue
-                if r.status_code == 429 or r.status_code >= 500:
+                if r.status_code == 429:
+                    # Don't sit and wait. Free tiers are capped per model per day, so a
+                    # 429 means "this one is spent today", not "try again in 4 seconds".
+                    # Raising hands control to the next entry in the router's chain.
+                    raise LLMError(f"{provider}/{model} rate-limited (429)")
+                if r.status_code >= 500:
                     await asyncio.sleep(2 ** (attempt + 1))
                     continue
                 r.raise_for_status()

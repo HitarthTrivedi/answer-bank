@@ -1,17 +1,28 @@
 {
-  "_comment": "The ONE model Prism calls. It routes, it never answers — it reads a question and decides which of the student's browser AIs is best placed to answer it. Routing is a classification job, so it is asked for JSON and for minimal reasoning. Verify current model IDs at console.groq.com/docs/models before changing.",
+  "_comment": "The ONE model Prism calls. It routes, it never answers — it reads a question and decides which of the student's browser AIs is best placed to answer it. Routing is a small classification job, so prefer FAST INSTRUCT models over reasoning models: a reasoning model spends thirty seconds deliberating over a five-way label choice.",
+
+  "_free_model_note": "`models` is an OpenRouter-specific ordered fallback list: it tries each in turn IN ONE REQUEST and bills nothing for :free variants, so a model that is down or rate-limited costs a few hundred ms rather than a failed run. FREE MODEL IDS ROTATE CONSTANTLY — verify this list at https://openrouter.ai/models?q=free and prune anything 404ing. Free tier is ~20 req/min and 50 req/day, rising to 1000/day once the account has $10 of lifetime credit.",
 
   "router": {
-    "provider": "groq",
-    "model": "openai/gpt-oss-120b",
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free",
     "json_mode": true,
-    "params": {
-      "reasoning_effort": "low",
-      "max_completion_tokens": 200
-    }
+    "params": { "max_tokens": 300 },
+    "models": [
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "google/gemini-2.0-flash-exp:free",
+      "mistralai/mistral-small-3.2-24b-instruct:free",
+      "qwen/qwen-2.5-72b-instruct:free",
+      "meta-llama/llama-3.2-3b-instruct:free",
+      "google/gemma-2-9b-it:free",
+      "mistralai/mistral-7b-instruct:free",
+      "deepseek/deepseek-chat-v3-0324:free",
+      "qwen/qwen3-14b:free",
+      "moonshotai/kimi-k2:free"
+    ]
   },
 
-  "_router_fallbacks_note": "Tried in order if the primary has no key or fails. All optional — with none configured, routing falls back to keywords and the product still works.",
+  "_router_fallbacks_note": "Tried only if OpenRouter itself is unreachable or keyless. All optional — with no keys at all, routing falls back to keywords and the product still works.",
   "router_fallbacks": [
     {
       "provider": "groq",
@@ -19,7 +30,6 @@
       "json_mode": true,
       "params": { "reasoning_effort": "low", "max_completion_tokens": 200 }
     },
-    { "provider": "google", "model": "gemma-4-31b-it", "json_mode": true },
-    { "provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free" }
+    { "provider": "google", "model": "gemma-4-31b-it", "json_mode": true }
   ]
 }

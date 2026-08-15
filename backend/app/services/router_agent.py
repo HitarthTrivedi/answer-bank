@@ -94,6 +94,7 @@ async def classify(text: str) -> dict:
                  {"role": "user", "content": text[:4000]}],
                 json_mode=cand.get("json_mode", False),
                 params=cand.get("params"),
+                models=cand.get("models"),
             )
             data = providers.extract_json(resp)
             qtype = str(data.get("qtype", "")).lower().strip()

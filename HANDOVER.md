@@ -16,7 +16,7 @@ Students upload a question bank (PDF / DOCX / image / pasted text). Prism answer
 polished DOCX with working, code, plots and diagrams.
 
 **Our AI routes; their AI answers.** The server calls exactly one model — the router,
-Groq running `openai/gpt-oss-120b` — and it never writes an answer. It reads a question,
+running on OpenRouter's free tier — and it never writes an answer. It reads a question,
 decides what kind of answer it needs, and picks which of the student's browser AIs should
 write it. One short JSON reply per question, so it stays cheap at any volume. Every actual answer comes from the
 student's own ChatGPT / Claude / Gemini session, driven by the Chrome extension.
@@ -179,7 +179,8 @@ truncated mid-generation (raise `settle_ms`), math arriving as unicode instead o
 
 | # | Task | Notes |
 |---|---|---|
-| P1-0 | Groq API key | console.groq.com/keys — free, no card. Paste into `GROQ_API_KEY`. Without it routing silently falls back to keywords, which still works but routes worse. |
+| P1-0 | OpenRouter API key | openrouter.ai/keys — free, no card. Paste into `OPENROUTER_API_KEY`. Without it routing silently falls back to keywords: still works, routes worse. |
+| P1-0b | Prune the free-model list | `models.json` lists ten `:free` models. **These IDs rotate constantly** — check them against openrouter.ai/models?q=free and drop any that 404. |
 | P1-1 | Razorpay account + keys | KYC needs PAN + bank. Webhook → `<domain>/api/billing/webhook`, subscribe `payment_link.paid`. Set `MOCK_PAYMENTS=false`. |
 | P1-2 | Real `SECRET_KEY` | `python -c "import secrets; print(secrets.token_hex(32))"`. Boot logs a warning until you do. |
 | P1-3 | Production `host_permissions` | `extension/manifest.json` only lists localhost. Add the API domain or the extension can't reach it. |
@@ -263,6 +264,11 @@ SymPy. Uploaded text is wrapped in `<question>` tags and declared data, never in
 **The extension holds nothing worth stealing.** No question bank, no prompt templates, no
 document builder, no API keys — it receives one prompt at a time. This is *why* the
 paywall can't be bypassed by tampering with it. Don't move logic into it.
+
+**Free model IDs rot.** The `models` list in `models.json` is OpenRouter's server-side
+fallback chain. Expect entries to disappear; a 404 just falls through to the next one, so
+this degrades quietly rather than breaking — which also means nobody notices until the
+list is empty. Re-check it each term.
 
 **The prompt is the product.** `solver.py` is the only lever on answer quality now that
 we don't choose the model. Treat changes there as product changes, not refactors.
