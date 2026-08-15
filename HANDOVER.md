@@ -133,7 +133,13 @@ the whole run from its own page. Installing the extension is the entire setup.
   which assistants the student isn't signed into.
 - **Server-side DOM selectors** (`backend/extension_selectors.json`) served at
   `/api/extension/config` — the site-redesign hotfix channel (§7).
-- **Figures.** Images embedded in an uploaded PDF/DOCX are extracted (`ingest.py`),
+- **Document mode.** A question whose meaning lives in a figure is answered by attaching
+  the ORIGINAL uploaded file to a fresh chat and asking "answer only question 7"
+  (`solver.build_document_prompt`, `/api/extension/document/{id}`). This sidesteps
+  figure→question association entirely: the paper already states which figure belongs
+  where. Requires `Question.source_number` — the number the question carried in the file,
+  which is why the extractor keeps it.
+- **Figures (fallback).** Images embedded in an uploaded PDF/DOCX are extracted (`ingest.py`),
   anchored to a character offset, matched to the question whose text span contains them,
   shipped in the batch payload as base64, and pasted into the chat by the driver. They
   also land in the exported DOCX. **We never interpret them** — no OCR, no vision model,
@@ -298,6 +304,11 @@ into 83 fragments. The regex finds candidates (cheap, exhaustive); the model jud
 are real (one small call, prompt sized by candidate count not file size). Don't "simplify"
 this by sending the document to the model — that's several calls per upload on a 50/day
 free tier.
+
+**Hand over the document, don't crop the picture.** For figure questions the paper goes
+to the AI whole, one numbered question at a time. Every attempt to decide *here* which
+image belongs to which question is a heuristic that will be wrong on some layout; the
+document is the authority and the model reads it better than we can.
 
 **Prefer text to pixels.** The reference answer document this style came from covers A*
 search, game trees and Bayesian networks across 23 pages with *zero* images — the data

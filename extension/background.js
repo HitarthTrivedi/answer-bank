@@ -163,6 +163,52 @@ async function waitForAnswer(tabId, cfg, site) {
   throw new Error('timed_out_waiting_for_answer')
 }
 
+/** Fetch the project's source file as base64, so it can be attached to a chat. */
+async function fetchDocument(url) {
+  const res = await fetch(`${session.apiBase}${url}`, {
+    headers: { Authorization: `Bearer ${session.access}` },
+  })
+  if (!res.ok) throw new Error(`document_fetch_failed_${res.status}`)
+  const buf = new Uint8Array(await res.arrayBuffer())
+  let bin = ''
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000))
+  }
+  return { data: btoa(bin), mime: res.headers.get('content-type') || 'application/pdf' }
+}
+
+/** Answer a figure question by handing over the WHOLE paper.
+ *
+ *  Extracting an image and pasting it means guessing which picture belongs to which
+ *  question. The document already answers that, and the model reading it is far better
+ *  at the judgement than any anchoring heuristic — so attach the paper and ask for one
+ *  numbered question. Still a fresh chat per question, so nothing accumulates. */
+async function answerFromDocument(item, cfg, sites) {
+  const site = { key: item.site, ...sites[item.site] }
+  const tab = await freshChatTab(site)
+
+  const doc = await fetchDocument(item.document.url)
+  const attached = await tell(tab.id, {
+    type: 'AB_ATTACH', site, data: doc.data, mime: doc.mime, filename: item.document.filename,
+  })
+  if (!attached.ok) throw new Error(attached.error)
+
+  // the upload has to finish before the site will accept a send
+  await sleep(cfg.upload_settle_ms || 4000)
+
+  const sent = await tell(tab.id, { type: 'AB_SEND', text: item.prompt, site, figures: [] })
+  if (!sent.ok) throw new Error(sent.error)
+
+  const markdown = await waitForAnswer(tab.id, cfg, site)
+  if (!markdown || markdown.length < 10) throw new Error('empty_answer')
+  if (markdown.trim().startsWith('NOT_FOUND')) throw new Error('question_not_found_in_document')
+
+  await apiFetch(`/questions/${item.question_id}/assist`, {
+    method: 'POST', body: { content_md: markdown },
+  })
+  return site
+}
+
 /** Answer one question start-to-finish in its own fresh chat. */
 async function answerOne(item, cfg, sites) {
   const site = { key: item.site, ...sites[item.site] }
@@ -202,14 +248,17 @@ async function runLoop() {
     state.total = batch[0].total
     state.projectTitle = batch[0].project_title
     state.done = state.total - res.waiting - batch.length
-    state.active = batch.map((b) => ({ idx: b.idx, site: cfg.sites[b.site].label }))
+    state.active = batch.map((b) => ({
+      idx: b.idx, site: cfg.sites[b.site].label, doc: !!b.document,
+    }))
     setStatus('running', batch.length === 1
       ? `Question ${batch[0].idx} of ${state.total} → ${cfg.sites[batch[0].site].label}`
       : `Questions ${batch.map((b) => b.idx).join(', ')} of ${state.total} — ` +
         `${batch.map((b) => cfg.sites[b.site].label).join(', ')} answering together`)
 
     // all three run at once; Promise.allSettled so one bad tab can't sink the batch
-    const results = await Promise.allSettled(batch.map((item) => answerOne(item, cfg, cfg.sites)))
+    const results = await Promise.allSettled(batch.map((item) =>
+      item.document ? answerFromDocument(item, cfg, cfg.sites) : answerOne(item, cfg, cfg.sites)))
 
     let progressed = false
     results.forEach((r, i) => {

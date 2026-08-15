@@ -271,20 +271,43 @@ def test_a_question_naming_a_figure_it_lacks_is_flagged(client, auth):
     assert by_idx[1]["needs_figure"] is True, "a figure reference with no figure must be flagged"
 
 
-def test_the_extension_receives_the_figure_and_the_prompt_says_so(client, auth):
+def test_a_figure_question_is_answered_from_the_whole_document(client, auth):
+    """A question whose meaning is in a picture gets the ORIGINAL FILE plus "answer only
+    question N", rather than an extracted image. The document already records which
+    figure belongs to which question — far more reliable than any anchoring we can do."""
     pid = [p["id"] for p in client.get("/api/projects", headers=auth).json()
            if p["title"] == "Figure Bank"][0]
     client.post(f"/api/projects/{pid}/start", headers=auth)
     wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
 
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
-    withfig = [b for b in batch if b["figures"]]
-    assert withfig, "the batch must carry the figure to the browser"
-    item = withfig[0]
-    assert item["figures"][0]["mime"] in ("image/png", "image/jpeg")
-    assert len(item["figures"][0]["data"]) > 100          # real base64, not a stub
-    # the AI must be told an image is attached, or it will answer from the text alone
-    assert "FIGURE FOR THIS QUESTION IS ATTACHED" in item["prompt"]
+    doc_items = [b for b in batch if b.get("document")]
+    assert doc_items, "the figure question must be routed through document mode"
+    item = doc_items[0]
+
+    assert item["document"]["number"] == 2          # it was Q2 in the uploaded file
+    assert item["document"]["url"].endswith(pid)
+    assert f"<answer_question>{item['document']['number']}</answer_question>" in item["prompt"]
+    assert "Answer ONLY question 2" in item["prompt"]
+    assert item["figures"] == [], "the document carries the figure; don't paste it twice"
+
+    # and the file itself is downloadable by its owner
+    doc = client.get(item["document"]["url"], headers=auth)
+    assert doc.status_code == 200
+    assert doc.content[:2] == b"PK"                 # the docx we uploaded
+
+
+def test_the_document_is_not_offered_when_there_is_no_source_file(client, auth):
+    """A bank pasted as text has no file to attach, so those questions must fall back to
+    the ordinary prompt rather than referencing a document that doesn't exist."""
+    pid = _started_project(client, auth, "Pasted With Figure Ref",
+                           text="1. From the graph above, find the peak voltage. (5 marks)\n"
+                                "2. Define normalization. (5 marks)\n"
+                                "3. Compare TCP and UDP. (5 marks)\n")
+    batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert batch
+    assert all(not b.get("document") for b in batch)
+    assert all("<question>" in b["prompt"] for b in batch)
 
 
 def test_a_figure_is_never_leaked_across_accounts(client, auth):

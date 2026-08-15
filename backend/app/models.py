@@ -46,6 +46,9 @@ class Project(Base):
     # draft -> extracting -> review -> processing -> done | error
     status: Mapped[str] = mapped_column(String(20), default="draft")
     source_filename: Mapped[str] = mapped_column(String(255), default="")
+    # the uploaded file itself, kept so it can be handed whole to an AI that reads
+    # figures better than any extraction we could do
+    source_path: Mapped[str] = mapped_column(String(500), default="")
     raw_text: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
     # export paywall — unlocking is per question bank, so re-downloads are always free
@@ -64,6 +67,9 @@ class Question(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     idx: Mapped[int] = mapped_column(Integer)  # order within the project
+    # the number this question carried in the uploaded file ("Q7." -> 7). Needed to ask
+    # an AI holding the whole document to "answer question 7".
+    source_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text)
     marks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # pending -> answering -> answered | assist_waiting | error

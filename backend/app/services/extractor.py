@@ -119,13 +119,14 @@ def _build(raw: str, kept: list[dict]) -> list[dict]:
             body = re.sub(r"^\s*\d{1,3}\s*\.?\s*", "", body)
         # a row with no text is a question whose content is a figure — keep it, marked,
         # rather than silently losing it
-        out.append(_finish(body.strip() or FIGURE_ONLY, c["offset"]))
+        out.append(_finish(body.strip() or FIGURE_ONLY, c["offset"], c.get("num")))
     return [q for q in out if len(q["text"]) >= 12]
 
 
-def _finish(text: str, offset: int = 0) -> dict:
+def _finish(text: str, offset: int = 0, number: int | None = None) -> dict:
     m = _MARKS.search(text)
-    return {"text": text, "marks": int(m.group(1) or m.group(2)) if m else None, "offset": offset}
+    return {"text": text, "marks": int(m.group(1) or m.group(2)) if m else None,
+            "offset": offset, "number": number}
 
 
 # ---------------------------------------------------------------- the AI pass

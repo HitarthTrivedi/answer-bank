@@ -117,6 +117,33 @@ def build_solver_messages(text: str, qtype: str, marks: int | None,
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+_DOCUMENT_SYS = (
+    "The full question paper is attached to this chat. It contains the figures, graphs, "
+    "circuits and tables that the questions refer to — read them from the document.\n\n"
+    "Answer ONLY question {number}. Do not answer any other question, do not summarise "
+    "the paper, and do not restate the question. If question {number} refers to a figure, "
+    "read the values, labels, axes or connections off it and use them; never invent data.\n"
+    "If you genuinely cannot find question {number} in the attached document, reply with "
+    "exactly: NOT_FOUND\n\n"
+)
+
+
+def build_document_prompt(text: str, qtype: str, marks: int | None, number: int) -> str:
+    """For a question whose meaning lives in the document — a graph to read, a circuit to
+    trace, a row that is nothing but a picture.
+
+    Rather than extracting the figure and pasting it, we hand the AI the whole paper and
+    ask for one numbered question at a time. That sidesteps the entire problem of working
+    out which image belongs to which question: the document already says so, and the model
+    reading it is far better at that than any anchoring heuristic.
+    """
+    msgs = build_solver_messages(text, qtype, marks)
+    body = text.strip()
+    asked = "" if body.startswith("[") else f"\n\nFor reference, the extracted text of that question was:\n{body}"
+    return (msgs[0]["content"] + "\n\n" + _DOCUMENT_SYS.format(number=number)
+            + f"<answer_question>{number}</answer_question>" + asked)
+
+
 def build_assist_prompt(text: str, qtype: str, marks: int | None,
                         has_figure: bool = False) -> str:
     """Single copy-paste blob for the student's own ChatGPT/Claude tab. The extension

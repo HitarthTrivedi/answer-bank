@@ -26,6 +26,7 @@ from ..config import get_extension_config
 from ..db import get_db
 from ..models import Project, Question, User
 from ..security import current_user
+from ..services import extractor, solver
 from ..services.queue import expire_leases
 
 log = logging.getLogger("prism.extension")
@@ -70,6 +71,24 @@ def download_extension():
     )
 
 
+@router.get("/document/{project_id}")
+def project_document(project_id: str, user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
+    """The originally uploaded file, for the extension to attach to a chat."""
+    project = db.get(Project, project_id)
+    if project is None or project.user_id != user.id:
+        raise HTTPException(404, "Project not found")
+    path = Path(project.source_path or "")
+    if not project.source_path or not path.exists():
+        raise HTTPException(404, "This bank was pasted as text — there is no source file")
+    kind = path.suffix.lstrip(".").lower()
+    media = {"pdf": "application/pdf",
+             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+             "png": "image/png", "jpg": "image/jpeg"}.get(kind, "application/octet-stream")
+    return Response(path.read_bytes(), media_type=media, headers={
+        "Content-Disposition": f'inline; filename="{project.source_filename or path.name}"'})
+
+
 @router.get("/config")
 def extension_config(_: User = Depends(current_user)):
     """Selectors, per-site strengths and batch size, fetched on every run.
@@ -104,6 +123,22 @@ def projects_needing_work(user: User = Depends(current_user), db: Session = Depe
                 "answered": sum(1 for q in p.questions if q.status == "answered"),
             })
     return out
+
+
+def _wants_the_document(q: Question) -> bool:
+    """Is this a question whose meaning is in the paper rather than in its text?
+
+    Image-only rows, questions naming a figure, and questions we managed to attach one
+    to. For these we hand the AI the whole document and ask for one numbered question,
+    instead of trying to work out which picture belongs where.
+    """
+    if not (q.project.source_path and Path(q.project.source_path).exists()):
+        return False
+    if q.source_number is None:
+        return False
+    return (q.text.startswith(extractor.FIGURE_ONLY[:24])
+            or bool(q.figures)
+            or extractor.mentions_a_figure(q.text))
 
 
 def _figure_payload(q: Question) -> list[dict]:
@@ -208,6 +243,16 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
             "route_reason": q.route_reason,
             "figures": _figure_payload(q),
         })
+        if _wants_the_document(q):
+            # hand over the paper itself and ask for one numbered question
+            batch[-1]["document"] = {
+                "url": f"/api/extension/document/{q.project_id}",
+                "filename": q.project.source_filename or "question-paper.pdf",
+                "number": q.source_number,
+            }
+            batch[-1]["prompt"] = solver.build_document_prompt(
+                q.text, q.qtype or "theory", q.marks, q.source_number)
+            batch[-1]["figures"] = []      # the document carries them
     db.commit()
 
     return {

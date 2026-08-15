@@ -167,7 +167,7 @@ export default function Project() {
                         className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300"
                       >
                         <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-400 align-middle" />
-                        Q{a.idx} · {a.site}
+                        Q{a.idx} · {a.site}{a.doc ? ' · reading your file' : ''}
                       </span>
                     ))}
                   </div>

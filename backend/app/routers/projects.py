@@ -99,7 +99,8 @@ async def create_project(
         data = await file.read()
         safe_name = re.sub(r"[^\w.\- ]", "_", file.filename or "upload")[:120]
         kind = ingest.validate_upload(data, safe_name)
-        (DATA_DIR / "uploads" / f"{uuid.uuid4().hex}.{kind}").write_bytes(data)  # retained for re-extraction/debug
+        stored = DATA_DIR / "uploads" / f"{uuid.uuid4().hex}.{kind}"
+        stored.write_bytes(data)
         doc = ingest.extract_document(data, kind)
         raw_text, figures = doc["text"], doc["figures"]
         source_name = safe_name
@@ -108,7 +109,8 @@ async def create_project(
         raise HTTPException(422, "No usable text found in the source")
 
     project = Project(user_id=user.id, title=title.strip(), status="extracting",
-                      source_filename=source_name, raw_text=raw_text[:500_000])
+                      source_filename=source_name, raw_text=raw_text[:500_000],
+                      source_path=str(stored) if file is not None else "")
     db.add(project)
     db.commit()
 
@@ -142,7 +144,8 @@ async def _run_extraction(project_id: str) -> None:
                 kept = found[:get_settings().max_questions_per_bank]
                 rows = []
                 for i, q in enumerate(kept):
-                    row = Question(project_id=project.id, idx=i, text=q["text"][:4000], marks=q["marks"])
+                    row = Question(project_id=project.id, idx=i, text=q["text"][:4000],
+                                   marks=q["marks"], source_number=q.get("number"))
                     db.add(row)
                     rows.append((row, q.get("offset", 0)))
                 db.flush()

@@ -37,12 +37,14 @@ def get_db():
 _ADDED_COLUMNS = {
     "users": [("credits", "INTEGER NOT NULL DEFAULT 0")],
     "projects": [
+        ("source_path", "VARCHAR(500) NOT NULL DEFAULT ''"),
         ("unlocked", "BOOLEAN NOT NULL DEFAULT 0"),
         ("unlock_reason", "VARCHAR(20) NOT NULL DEFAULT ''"),
     ],
     "questions": [
         ("target_site", "VARCHAR(20) NOT NULL DEFAULT ''"),
         ("leased_at", "DATETIME"),
+        ("source_number", "INTEGER"),
     ],
 }
 

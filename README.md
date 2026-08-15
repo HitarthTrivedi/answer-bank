@@ -64,10 +64,12 @@ upload → split into questions → student reviews/edits → queue:
 - **Tables over pictures.** The house style pushes structured text wherever it works — a
   search trace is a step table, a comparison is a parameter table, a state space is an
   edge-cost table. It reads better, exports cleanly to DOCX, and costs nothing to produce.
-- **Figures cost us nothing.** Images embedded in an uploaded PDF/DOCX are extracted,
-  matched to the question they sit with, and pasted into the chat alongside the prompt —
-  so the student's own AI does the vision. No OCR, no vision API, no tesseract. A question
-  that names a figure we couldn't find is flagged at review rather than answered blind.
+- **Figure questions get the whole paper, not a cropped image.** For a question whose
+  meaning is in a graph or circuit, the extension attaches the *original file* to a fresh
+  chat and asks "answer only question 7". The document already records which figure
+  belongs to which question — the model reading it judges that far better than any
+  anchoring heuristic could. No OCR, no vision API, no tesseract, and nothing for us to
+  get wrong. Extracted figures remain as a fallback when there's no source file.
 
 ## Making money
 

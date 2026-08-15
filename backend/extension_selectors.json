@@ -115,5 +115,7 @@
       "strengths": "best at diagrams, plots and anything visual or spatial"
     }
   },
-  "batch_size": 3
+  "batch_size": 3,
+  "upload_settle_ms": 4000,
+  "_upload_note": "How long to wait after attaching a file before pressing send. A chat site rejects a send while an upload is still in flight, and a big question paper takes seconds."
 }

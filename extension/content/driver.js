@@ -156,6 +156,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
 
     if (!SITE && msg.site) SITE = msg.site
 
+    // Attach the whole question paper, once, before a run of numbered questions.
+    // Same synthetic-paste mechanism as a figure — the sites accept a File either way.
+    if (msg.type === 'AB_ATTACH') {
+      SITE = msg.site
+      const composer = pick(SITE.composer)
+      if (!composer) { respond({ ok: false, error: 'composer_not_found' }); return true }
+      try {
+        const bin = atob(msg.data)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        const dt = new DataTransfer()
+        dt.items.add(new File([bytes], msg.filename || 'question-paper.pdf', { type: msg.mime }))
+        composer.focus()
+        composer.dispatchEvent(new ClipboardEvent('paste', {
+          clipboardData: dt, bubbles: true, cancelable: true,
+        }))
+        respond({ ok: true })
+      } catch (e) {
+        respond({ ok: false, error: 'attach_failed:' + (e && e.message) })
+      }
+      return true
+    }
+
     if (msg.type === 'AB_SEND') {
       SITE = msg.site
       const composer = pick(SITE.composer)
