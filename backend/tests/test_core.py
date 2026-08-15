@@ -238,3 +238,46 @@ def test_candidates_are_offered_to_the_ai_without_the_document_body():
     assert len(same) == len(cands)
     assert sum(len(c["opening"]) for c in same) == sum(len(c["opening"]) for c in cands), \
         "a 20 KB document must cost the same prompt as a 700-byte one"
+
+
+SPREADSHEET_EXPORT = """AI Question Bank
+1Define AI. What are the task domains of AI?
+2Give classification of Artificial Intelligence.
+3Discuss the requirement of good control strategy in AI.
+4
+5Write A* algorithm
+6
+12
+What do you mean by state space representation of a problem? Illustrate the water jug problem.
+"""
+
+
+def test_a_spreadsheet_exported_to_pdf_still_splits():
+    """A Google Sheet printed to PDF puts the number in one cell and the question in
+    another, so the text layer runs them together with no punctuation: '1Define AI'.
+    Every delimiter-based pattern misses, and the upload failed with 'No questions
+    detected' — the file looked empty to us while looking obviously fine to the student."""
+    qs = extractor.heuristic_extract(SPREADSHEET_EXPORT)
+    texts = [q["text"] for q in qs]
+    assert "Define AI. What are the task domains of AI?" in texts
+    assert "Give classification of Artificial Intelligence." in texts
+    assert "Write A* algorithm" in texts
+    # a number alone on its line, question wrapped onto the next
+    assert any(t.startswith("What do you mean by state space") for t in texts)
+
+
+def test_an_image_only_row_becomes_a_visible_question_not_a_silent_loss():
+    """Rows whose question IS a picture have no text at all. Dropping them loses exactly
+    the diagram questions — and silently, so the student never learns they're missing."""
+    qs = extractor.heuristic_extract(SPREADSHEET_EXPORT)
+    image_qs = [q for q in qs if q["text"] == extractor.FIGURE_ONLY]
+    assert len(image_qs) == 2, "rows 4 and 6 are empty and must survive as flagged questions"
+
+
+def test_the_glued_shape_never_hijacks_a_normal_bank():
+    """'1Define' is a guess that would misfire on ordinary prose, so it must only apply
+    when no punctuated numbering exists anywhere in the document."""
+    qs = extractor.heuristic_extract(PLAIN_BANK)
+    assert len(qs) == 3
+    qs = extractor.heuristic_extract(ANSWER_DOC)
+    assert len(qs) == 3

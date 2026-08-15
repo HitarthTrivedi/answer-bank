@@ -26,33 +26,59 @@ log = logging.getLogger("prism.extractor")
 _Q_MARKER = re.compile(r"^\s*Q(?:uestion)?\s*\.?\s*(\d{1,3})\s*[\.\):]\s*(.*)", re.IGNORECASE)
 # "7." / "7)" — a bare number: a question in a plain bank, but also every algorithm step.
 _NUM_LINE = re.compile(r"^\s*(\d{1,3})\s*[\.\):]\s+(.*)")
+# "7Define AI..." — no separator at all. This is what a SPREADSHEET exported to PDF looks
+# like: the number is one cell and the question another, and the text layer just runs
+# them together. Common enough to matter, ambiguous enough to be a last resort.
+_NUM_GLUED = re.compile(r"^\s*(\d{1,3})([A-Za-z\"'“‘].*)$")
+# "7" alone on a line, with the question on the line after — same spreadsheet exports,
+# when the cell wrapped.
+_NUM_ALONE = re.compile(r"^\s*(\d{1,3})\s*$")
 _MARKS = re.compile(r"[\(\[]\s*(\d{1,3})\s*(?:marks?|M)\s*[\)\]]|\b(\d{1,3})\s*marks?\b", re.IGNORECASE)
 
 _MARKER_CONFIDENCE = 3     # fewer explicit markers than this and they're incidental
 _PREVIEW_CHARS = 110       # of each candidate, shown to the model
 _MAX_CANDIDATES = 400      # sanity bound on one upload
+_LOOKAHEAD = 3             # lines to search for text belonging to a bare number
+
+# A row whose question lives in an image has no text at all. Dropping it loses exactly
+# the diagram questions the figure pipeline exists for, so it is kept with this marker
+# and the student fills it in (or deletes it) at the review step.
+FIGURE_ONLY = "[This question's content is an image — check the attached figure, or type the question here.]"
 
 
 # ---------------------------------------------------------------- candidates
 
 
 def _candidates(raw: str) -> list[dict]:
-    """Every line that *could* start a question, with where it starts."""
-    out, pos = [], 0
-    for line in raw.split("\n"):
-        m = _Q_MARKER.match(line)
-        kind = "marker"
-        if not m:
-            m = _NUM_LINE.match(line)
-            kind = "number"
-        if m:
-            out.append({
-                "offset": pos,
-                "kind": kind,
-                "num": int(m.group(1)),
-                "opening": (m.group(2) or "").strip()[:_PREVIEW_CHARS],
-            })
+    """Every line that *could* start a question, with where it starts.
+
+    Four shapes, because question banks arrive in all of them — including spreadsheets
+    exported to PDF, where the numbering column and the text column are glued together
+    with no punctuation between them.
+    """
+    lines = raw.split("\n")
+    offsets, pos = [], 0
+    for line in lines:
+        offsets.append(pos)
         pos += len(line) + 1
+
+    out = []
+    for i, line in enumerate(lines):
+        for kind, pattern in (("marker", _Q_MARKER), ("number", _NUM_LINE), ("glued", _NUM_GLUED)):
+            m = pattern.match(line)
+            if m:
+                out.append({"offset": offsets[i], "kind": kind, "num": int(m.group(1)),
+                            "opening": (m.group(2) or "").strip()[:_PREVIEW_CHARS]})
+                break
+        else:
+            m = _NUM_ALONE.match(line)
+            if not m:
+                continue
+            # the cell wrapped: the question is on one of the next few lines
+            ahead = next((lines[j].strip() for j in range(i + 1, min(i + 1 + _LOOKAHEAD, len(lines)))
+                          if lines[j].strip()), "")
+            out.append({"offset": offsets[i], "kind": "alone", "num": int(m.group(1)),
+                        "opening": ahead[:_PREVIEW_CHARS] or FIGURE_ONLY})
     return out[:_MAX_CANDIDATES]
 
 
@@ -62,9 +88,20 @@ def _build(raw: str, kept: list[dict]) -> list[dict]:
     for i, c in enumerate(kept):
         end = kept[i + 1]["offset"] if i + 1 < len(kept) else len(raw)
         body = " ".join(raw[c["offset"]:end].split())
-        # drop the leading "Q7." / "7." — the number is positional, not part of the question
-        body = _Q_MARKER.sub(r"\2", body, count=1) if body[:1].upper() == "Q" else _NUM_LINE.sub(r"\2", body, count=1)
-        out.append(_finish(body.strip(), c["offset"]))
+        # drop the leading "Q7." / "7." / "7" — the number is positional, not part of the
+        # question. Try each shape; whichever matches, keep only what followed it.
+        for pattern in (_Q_MARKER, _NUM_LINE, _NUM_GLUED):
+            m = pattern.match(body)
+            if m:
+                body = (m.group(2) or "").strip()
+                break
+        else:
+            # a bare number, with its text on a following line — or with no text at all,
+            # which means the question itself is a picture
+            body = re.sub(r"^\s*\d{1,3}\b\s*", "", body)
+        # a row with no text is a question whose content is a figure — keep it, marked,
+        # rather than silently losing it
+        out.append(_finish(body.strip() or FIGURE_ONLY, c["offset"]))
     return [q for q in out if len(q["text"]) >= 12]
 
 
@@ -133,11 +170,19 @@ async def _ai_select(candidates: list[dict]) -> list[dict] | None:
 
 
 def heuristic_extract(raw: str) -> list[dict]:
-    """No-model split. Prefers explicit Q markers; falls back to bare numbers."""
+    """No-model split, most-reliable shape first.
+
+    Tiering matters: "Q1." is unambiguous, "1." is usually right, and "1Define" is a
+    guess that would misfire on ordinary prose. Take the strongest signal the document
+    actually offers and ignore the weaker ones — mixing them is what shreds a document.
+    """
     cands = _candidates(raw)
-    markers = [c for c in cands if c["kind"] == "marker"]
-    kept = markers if len(markers) >= _MARKER_CONFIDENCE else cands
-    return _build(raw, kept)
+    for tier in ("marker", "number"):
+        hits = [c for c in cands if c["kind"] == tier]
+        if len(hits) >= _MARKER_CONFIDENCE:
+            return _build(raw, hits)
+    # nothing punctuated: a spreadsheet export, so accept the glued/bare-number shapes
+    return _build(raw, cands)
 
 
 async def extract_questions(raw: str) -> list[dict]:
