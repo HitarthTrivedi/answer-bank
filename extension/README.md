@@ -70,8 +70,19 @@ another. Nothing to configure, nothing to get wrong.
 ChatGPT renames a button, **edit that file on the server** — every installed extension
 picks it up on its next run. Nobody reinstalls anything.
 
+### Checking the selectors in 10 seconds
+
+```bash
+npm run selector-check      # regenerates selector-check.js from the server config
+```
+
+Open chatgpt.com / claude.ai / gemini.google.com, paste the contents of
+`selector-check.js` into the DevTools console, and it prints a pass/fail table naming
+the exact selector that matched — or the one that didn't. Far faster than running a
+whole bank and guessing why it stalled.
+
 The selectors shipped are best-effort and **must be verified against the live sites
-before launch**. To check one: open the site, DevTools console, and run
+before launch**. The manual equivalent is:
 
 ```js
 document.querySelector("#prompt-textarea")                   // composer

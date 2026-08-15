@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Dev tooling only — Chrome loads this folder directly and ignores this file.",
+  "description": "Dev tooling only \u2014 Chrome loads this folder directly and ignores this file.",
   "scripts": {
-    "test": "node --test test/html2md.test.js"
+    "test": "node --test test/html2md.test.js",
+    "selector-check": "node tools/gen-selector-check.mjs"
   },
   "devDependencies": {
     "jsdom": "^25.0.0"
