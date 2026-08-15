@@ -180,7 +180,7 @@ truncated mid-generation (raise `settle_ms`), math arriving as unicode instead o
 | # | Task | Notes |
 |---|---|---|
 | P1-0 | OpenRouter API key | openrouter.ai/keys — free, no card. Paste into `OPENROUTER_API_KEY`. Without it routing silently falls back to keywords: still works, routes worse. |
-| P1-0b | Prune the free-model list | `models.json` lists ten `:free` models. **These IDs rotate constantly** — check them against openrouter.ai/models?q=free and drop any that 404. |
+| P1-0b | Sanity-check the fallback IDs | The primary is `openrouter/free`, which self-maintains. The four *fallbacks* are pinned IDs and **do** rot — re-check with `GET /api/v1/models` if you see router warnings. |
 | P1-1 | Razorpay account + keys | KYC needs PAN + bank. Webhook → `<domain>/api/billing/webhook`, subscribe `payment_link.paid`. Set `MOCK_PAYMENTS=false`. |
 | P1-2 | Real `SECRET_KEY` | `python -c "import secrets; print(secrets.token_hex(32))"`. Boot logs a warning until you do. |
 | P1-3 | Production `host_permissions` | `extension/manifest.json` only lists localhost. Add the API domain or the extension can't reach it. |
@@ -265,10 +265,15 @@ SymPy. Uploaded text is wrapped in `<question>` tags and declared data, never in
 document builder, no API keys — it receives one prompt at a time. This is *why* the
 paywall can't be bypassed by tampering with it. Don't move logic into it.
 
-**Free model IDs rot.** The `models` list in `models.json` is OpenRouter's server-side
-fallback chain. Expect entries to disappear; a 404 just falls through to the next one, so
-this degrades quietly rather than breaking — which also means nobody notices until the
-list is empty. Re-check it each term.
+**Use `openrouter/free`, don't hand-write model lists.** Individual `:free` IDs rot fast —
+when this was first written with ten hand-picked IDs, every single one was already dead.
+`openrouter/free` is OpenRouter's own router across live free models, so the list is
+their problem, not ours.
+
+**Keep `max_tokens` generous on the router.** It often lands on a *reasoning* model, and
+reasoning tokens count against the completion budget (240–370 observed for a one-line
+classification). Set it too low and the model spends the whole allowance thinking, then
+returns empty content. Free models cost nothing, so there is no reason to be tight.
 
 **The prompt is the product.** `solver.py` is the only lever on answer quality now that
 we don't choose the model. Treat changes there as product changes, not refactors.

@@ -69,9 +69,11 @@ async def chat(provider: str, model: str, messages: list[dict],
             await asyncio.sleep(wait)
         _last_call[provider] = time.monotonic()
 
-    base: dict = {"model": model, "messages": messages, "temperature": 0.0}
+    minimal: dict = {"model": model, "messages": messages, "temperature": 0.0}
+    base = dict(minimal)
     if models and provider == "openrouter":
-        base["models"] = models          # OpenRouter walks these in order, server-side
+        # OpenRouter walks these in order, server-side — but caps the array at 3.
+        base["models"] = models[:3]
     rich = dict(base, **(params or {}))
     if json_mode:
         rich["response_format"] = {"type": "json_object"}
@@ -91,12 +93,13 @@ async def chat(provider: str, model: str, messages: list[dict],
                     headers=headers,
                     json=body,
                 )
-                if r.status_code == 400 and body is rich:
-                    # an unsupported knob (reasoning_effort, json mode) — drop them all
-                    # and try once more rather than losing the routing decision
-                    log.warning("%s/%s rejected optional params (%s); retrying plain",
+                if r.status_code == 400 and body is not minimal:
+                    # an unsupported knob (reasoning_effort, json mode, a models array
+                    # that is too long) — strip everything optional and try once more
+                    # rather than losing the routing decision
+                    log.warning("%s/%s rejected optional fields (%s); retrying minimal",
                                 provider, model, r.text[:160])
-                    body = base
+                    body = minimal
                     continue
                 if r.status_code == 429:
                     # Don't sit and wait. Free tiers are capped per model per day, so a
