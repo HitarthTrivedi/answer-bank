@@ -41,10 +41,11 @@ upload → extract questions (regex) → student reviews/edits → queue:
 ```
 
 **Key design decisions**
-- **Our AI routes; their AI answers.** The server calls exactly one model, and only to
-  classify a question and pick which assistant should handle it — a few tokens on a free
-  tier. The expensive part, actually answering, runs on the student's own
-  ChatGPT/Claude/Gemini subscription. With no key at all, routing falls back to keywords.
+- **Our AI routes; their AI answers.** The server calls exactly one model — Groq running
+  `openai/gpt-oss-120b` by default — and only to classify a question and pick which
+  assistant should handle it. One short JSON reply per question. The expensive part,
+  actually answering, runs on the student's own ChatGPT/Claude/Gemini subscription. With
+  no key at all, routing falls back to keywords and everything still works.
 - **Three at a time, across three assistants.** A batch is always spread over distinct
   AIs. 30 questions become 10 each rather than 30 on one account, so nobody's free
   message cap runs out mid-run — and the bank finishes ~3× faster.

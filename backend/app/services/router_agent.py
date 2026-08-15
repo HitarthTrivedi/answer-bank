@@ -6,7 +6,7 @@ It looks at ONE question and makes two calls:
   2. which of the student's browser AIs should answer it.
 
 It never writes an answer. That is deliberate and it is what keeps the economics working:
-routing is a few tokens on a tiny free-tier model, while the expensive part — actually
+routing is one short JSON reply per question, while the expensive part — actually
 answering — runs on the student's own ChatGPT/Claude/Gemini subscription.
 
 Spreading questions across three AIs is also what stops any one of them hitting its free
@@ -92,6 +92,8 @@ async def classify(text: str) -> dict:
                 cand["provider"], cand["model"],
                 [{"role": "system", "content": _system_prompt()},
                  {"role": "user", "content": text[:4000]}],
+                json_mode=cand.get("json_mode", False),
+                params=cand.get("params"),
             )
             data = providers.extract_json(resp)
             qtype = str(data.get("qtype", "")).lower().strip()

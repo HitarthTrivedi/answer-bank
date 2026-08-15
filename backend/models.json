@@ -1,8 +1,25 @@
 {
-  "_comment": "The ONE model Prism calls. It routes, it never answers — it reads a question and decides which of the student's browser AIs is best placed to answer it. Keep it small and cheap: this is a classification job, not a reasoning job. With no key configured, routing falls back to keywords and the product still works. Free-tier model IDs rotate; verify before changing.",
-  "router": { "provider": "google", "model": "gemma-4-31b-it" },
+  "_comment": "The ONE model Prism calls. It routes, it never answers — it reads a question and decides which of the student's browser AIs is best placed to answer it. Routing is a classification job, so it is asked for JSON and for minimal reasoning. Verify current model IDs at console.groq.com/docs/models before changing.",
+
+  "router": {
+    "provider": "groq",
+    "model": "openai/gpt-oss-120b",
+    "json_mode": true,
+    "params": {
+      "reasoning_effort": "low",
+      "max_completion_tokens": 200
+    }
+  },
+
+  "_router_fallbacks_note": "Tried in order if the primary has no key or fails. All optional — with none configured, routing falls back to keywords and the product still works.",
   "router_fallbacks": [
-    { "provider": "groq", "model": "llama-3.3-70b-versatile" },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "json_mode": true,
+      "params": { "reasoning_effort": "low", "max_completion_tokens": 200 }
+    },
+    { "provider": "google", "model": "gemma-4-31b-it", "json_mode": true },
     { "provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free" }
   ]
 }

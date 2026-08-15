@@ -15,10 +15,10 @@ Students upload a question bank (PDF / DOCX / image / pasted text). Prism answer
 25–40 — routing each question to the AI best suited to its type, then exports the lot as a
 polished DOCX with working, code, plots and diagrams.
 
-**Our AI routes; their AI answers.** The server calls exactly one model — the router —
-and it never writes an answer. It reads a question, decides what kind of answer it needs,
-and picks which of the student's browser AIs should write it. That is a handful of tokens
-on a free tier, so it stays cheap at any volume. Every actual answer comes from the
+**Our AI routes; their AI answers.** The server calls exactly one model — the router,
+Groq running `openai/gpt-oss-120b` — and it never writes an answer. It reads a question,
+decides what kind of answer it needs, and picks which of the student's browser AIs should
+write it. One short JSON reply per question, so it stays cheap at any volume. Every actual answer comes from the
 student's own ChatGPT / Claude / Gemini session, driven by the Chrome extension.
 
 **Questions run three at a time across three different assistants.** This is what stops
@@ -179,6 +179,7 @@ truncated mid-generation (raise `settle_ms`), math arriving as unicode instead o
 
 | # | Task | Notes |
 |---|---|---|
+| P1-0 | Groq API key | console.groq.com/keys — free, no card. Paste into `GROQ_API_KEY`. Without it routing silently falls back to keywords, which still works but routes worse. |
 | P1-1 | Razorpay account + keys | KYC needs PAN + bank. Webhook → `<domain>/api/billing/webhook`, subscribe `payment_link.paid`. Set `MOCK_PAYMENTS=false`. |
 | P1-2 | Real `SECRET_KEY` | `python -c "import secrets; print(secrets.token_hex(32))"`. Boot logs a warning until you do. |
 | P1-3 | Production `host_permissions` | `extension/manifest.json` only lists localhost. Add the API domain or the extension can't reach it. |

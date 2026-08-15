@@ -11,6 +11,7 @@ the product runs and tests reproducibly with zero keys.
 """
 import asyncio
 import json
+import logging
 import re
 import time
 
@@ -25,6 +26,8 @@ BASES = {
 }
 
 _KEY_ATTR = {"google": "google_api_key", "groq": "groq_api_key", "openrouter": "openrouter_api_key"}
+
+log = logging.getLogger("prism.providers")
 
 # global pacing: never hit the same provider faster than provider_min_interval_s
 _last_call: dict[str, float] = {}
@@ -42,7 +45,11 @@ class LLMError(Exception):
     pass
 
 
-async def chat(provider: str, model: str, messages: list[dict], json_mode: bool = False) -> str:
+async def chat(provider: str, model: str, messages: list[dict],
+               json_mode: bool = False, params: dict | None = None) -> str:
+    """`params` carries model-specific extras from models.json (e.g. gpt-oss takes
+    `reasoning_effort`). If the endpoint rejects them we retry once with a plain body,
+    so a model that doesn't know a knob degrades instead of failing the run."""
     s = get_settings()
     if s.mock_llm:
         return _mock_routing_response(messages)
@@ -57,10 +64,12 @@ async def chat(provider: str, model: str, messages: list[dict], json_mode: bool 
             await asyncio.sleep(wait)
         _last_call[provider] = time.monotonic()
 
-    body: dict = {"model": model, "messages": messages, "temperature": 0.0}
+    base: dict = {"model": model, "messages": messages, "temperature": 0.0}
+    rich = dict(base, **(params or {}))
     if json_mode:
-        body["response_format"] = {"type": "json_object"}
+        rich["response_format"] = {"type": "json_object"}
 
+    body = rich
     async with httpx.AsyncClient(timeout=s.llm_timeout_s) as client:
         for attempt in range(3):
             try:
@@ -69,6 +78,13 @@ async def chat(provider: str, model: str, messages: list[dict], json_mode: bool 
                     headers={"Authorization": f"Bearer {key}"},
                     json=body,
                 )
+                if r.status_code == 400 and body is rich:
+                    # an unsupported knob (reasoning_effort, json mode) — drop them all
+                    # and try once more rather than losing the routing decision
+                    log.warning("%s/%s rejected optional params (%s); retrying plain",
+                                provider, model, r.text[:160])
+                    body = base
+                    continue
                 if r.status_code == 429 or r.status_code >= 500:
                     await asyncio.sleep(2 ** (attempt + 1))
                     continue
