@@ -15,10 +15,11 @@ same as batched into one thread, which is the failure this product exists to fix
 import base64
 import io
 import logging
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from ..config import get_extension_config
@@ -36,6 +37,37 @@ MAX_FIGURE_PX = 1400
 MAX_FIGURE_BYTES = 1_500_000
 
 router = APIRouter(prefix="/api/extension", tags=["extension"])
+
+
+# The extension folder, packaged on demand so a student never needs the repo.
+EXTENSION_DIR = Path(__file__).resolve().parent.parent.parent.parent / "extension"
+_SHIPPED = ("manifest.json", "background.js", "popup.html", "popup.js", "popup.css",
+            "content/html2md.js", "content/driver.js", "content/bridge.js",
+            "icons/16.png", "icons/48.png", "icons/128.png")
+
+
+@router.get("/download")
+def download_extension():
+    """Zip of the extension, ready to unzip and load.
+
+    Deliberately unauthenticated: this is client code with nothing secret in it — no keys,
+    no prompts, no question banks (see the module docstring). Requiring a token here would
+    only mean the download couldn't be a plain link.
+    """
+    missing = [f for f in _SHIPPED if not (EXTENSION_DIR / f).exists()]
+    if missing:
+        log.error("extension package incomplete: %s", missing)
+        raise HTTPException(500, "Extension package is incomplete on the server")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name in _SHIPPED:
+            z.write(EXTENSION_DIR / name, f"prism-extension/{name}")
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="prism-extension.zip"'},
+    )
 
 
 @router.get("/config")

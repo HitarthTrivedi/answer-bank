@@ -3,7 +3,10 @@
   "name": "Prism Runner",
   "version": "0.2.0",
   "description": "Answers your question bank using the AI tabs you're already signed into.",
-  "permissions": ["storage", "tabs"],
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
@@ -11,15 +14,26 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
-    "https://gemini.google.com/*"
+    "https://gemini.google.com/*",
+    "http://127.0.0.1:5173/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Prism Runner",
-    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
   },
-  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
   "content_scripts": [
     {
       "_comment": "The AI sites the extension drives.",
@@ -29,13 +43,21 @@
         "https://claude.ai/*",
         "https://gemini.google.com/*"
       ],
-      "js": ["content/html2md.js", "content/driver.js"],
+      "js": [
+        "content/html2md.js",
+        "content/driver.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "_comment": "The Prism app itself. Running here is what removes all setup: same origin as the app, so the extension reads the session the student is already signed in with. ADD YOUR PRODUCTION DOMAIN HERE when you deploy.",
-      "matches": ["http://localhost:5173/*"],
-      "js": ["content/bridge.js"],
+      "_comment": "The Prism app itself. Running here is what removes all setup: same origin as the app, so the extension reads the session the student is already signed in with. Both localhost AND 127.0.0.1 are listed because they are different origins to Chrome \u2014 miss one and the extension is silently invisible on that URL. ADD YOUR PRODUCTION DOMAIN HERE when you deploy.",
+      "matches": [
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
       "run_at": "document_start"
     }
   ]
