@@ -10,6 +10,20 @@ back.
 answers them concurrently. That is both a speed win and the rate-limit strategy: 30
 questions become 10 each rather than 30 on one account.
 
+## About manifest.json
+
+It carries **no comments of any kind** — not even `_comment` keys. Chrome rejects
+unrecognised keys inside a `content_scripts` entry and refuses to load the whole
+extension, and the only symptom is the app reporting "extension not installed". `npm test`
+guards against it. Explanations go here instead:
+
+- **Two content script blocks.** The first drives the AI sites. The second injects
+  `content/bridge.js` into the Prism app itself — that is what removes all setup, because
+  same-origin means the extension reads the session you're already signed in with.
+- **`localhost` *and* `127.0.0.1`.** Chrome treats them as different origins. Miss one and
+  the extension is silently invisible on that URL. **Add your production domain here when
+  you deploy.**
+
 ## Install (development)
 
 1. `chrome://extensions` → turn on **Developer mode**

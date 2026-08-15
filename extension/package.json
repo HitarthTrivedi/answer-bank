@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Dev tooling only \u2014 Chrome loads this folder directly and ignores this file.",
   "scripts": {
-    "test": "node --test test/html2md.test.js",
+    "test": "node --test test/manifest.test.js test/html2md.test.js",
     "selector-check": "node tools/gen-selector-check.mjs"
   },
   "devDependencies": {
