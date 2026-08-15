@@ -26,6 +26,12 @@ log = logging.getLogger("prism.ingest")
 MIN_FIGURE_BYTES = 200
 MIN_FIGURE_PX = 120
 
+# A line that is nothing but a number: a table row label, which names the figure sitting
+# in that row. Worth this much of a head start over raw distance when it sits below an
+# image — see _anchor_figures.
+_ROW_LABEL = __import__("re").compile(r"\d{1,3}")
+_ROW_LABEL_BONUS = 60.0
+
 MAGIC = {
     "pdf": b"%PDF",
     "docx": b"PK\x03\x04",
@@ -110,6 +116,137 @@ def _usable_figure(raw: bytes) -> tuple[bool, str]:
         return False, ""
 
 
+def _mul(m: list, n: list) -> list:
+    """Compose two PDF matrices [a b c d e f] (m applied first, then n)."""
+    a1, b1, c1, d1, e1, f1 = m
+    a2, b2, c2, d2, e2, f2 = n
+    return [a1 * a2 + b1 * c2, a1 * b2 + b1 * d2,
+            c1 * a2 + d1 * c2, c1 * b2 + d1 * d2,
+            e1 * a2 + f1 * c2 + e2, e1 * b2 + f1 * d2 + f2]
+
+
+def _image_positions(page, reader) -> dict[str, tuple[float, float]]:
+    """Each image's vertical EXTENT on the page (low, high), by XObject name.
+
+    PDFs don't store "this image belongs to question 7" — they store a transformation
+    matrix and a draw call. We replay the content stream, tracking the CTM through the
+    q/Q stack, and read the placement at each `Do`.
+
+    The extent matters, not the midpoint. Exam figures are tall, and the row label that
+    identifies them ("7") sits somewhere inside that height — often nowhere near the
+    centre. Matching on the midpoint sends two images on a sparse page to the same row.
+    """
+    from pypdf.generic import ContentStream
+
+    out: dict[str, tuple[float, float]] = {}
+    ctm = [1.0, 0, 0, 1.0, 0, 0]
+    stack: list[list] = []
+    for operands, op in ContentStream(page.get_contents(), reader).operations:
+        if op == b"q":
+            stack.append(list(ctm))
+        elif op == b"Q":
+            ctm = stack.pop() if stack else [1.0, 0, 0, 1.0, 0, 0]
+        elif op == b"cm" and len(operands) == 6:
+            ctm = _mul([float(x) for x in operands], ctm)
+        elif op == b"Do" and operands:
+            name = str(operands[0]).lstrip("/")
+            # the image fills the unit square under the CTM; d may be negative (flip)
+            bottom, top = ctm[5], ctm[5] + ctm[3]
+            out.setdefault(name, (min(bottom, top), max(bottom, top)))
+    return out
+
+
+def _text_positions(page) -> list[tuple[float, str]]:
+    """(vertical position, text) for every run of text drawn on the page."""
+    spans: list[tuple[float, str]] = []
+
+    def visit(text, cm, tm, font_dict, font_size):
+        if text and text.strip():
+            spans.append((_mul(list(tm), list(cm))[5], text.strip()))
+
+    try:
+        page.extract_text(visitor_text=visit)
+    except Exception:
+        return []
+    return spans
+
+
+def _anchor_figures(page, reader, body: str, offset: int) -> list[dict]:
+    """Work out which line of text each image on this page belongs beside.
+
+    A figure is identified by the nearest text — usually its row label or the question it
+    illustrates — but "nearest" alone is not enough. In a table, a label sits a couple of
+    points BELOW its own image and only slightly further from the image of the row above,
+    so pure proximity hands the same label to both.
+
+    The fix is that a label identifies ONE figure: pair them up closest-first, consuming
+    each label as it is used. An image left without a label (two figures in one row) falls
+    back to its nearest text, sharing.
+    """
+    positions = _image_positions(page, reader)
+    spans = _text_positions(page)
+    images = []
+    for img in page.images:
+        ok, ext = _usable_figure(img.data)
+        if not ok:
+            continue
+        key = str(img.name).lstrip("/")
+        images.append((img, ext, positions.get(key.rsplit(".", 1)[0]) or positions.get(key)))
+
+    if not images:
+        return []
+    if not spans:
+        return [{"bytes": im.data, "ext": ext, "anchor": offset} for im, ext, _ in images]
+
+    def gap(band, y):
+        if band is None:
+            return float("inf")
+        low, high = band
+        return 0.0 if low <= y <= high else min(abs(low - y), abs(high - y))
+
+    def score(band, j):
+        """Distance, with a thumb on the scale for a table row label.
+
+        Layout cuts both ways: in an exam paper the question OWNING a figure sits above
+        it, while in a spreadsheet the row label sits just below its own image. Those are
+        opposite directions, so distance alone cannot settle it.
+
+        What separates them is what the text says. A bare number under an image is a row
+        label and names that figure. Anything else below a figure is usually the NEXT
+        question, so for those we let plain proximity pick the question above.
+        """
+        y, text = spans[j]
+        if band is not None and _ROW_LABEL.fullmatch(text) and y < band[0]:
+            return gap(band, y) - _ROW_LABEL_BONUS
+        return gap(band, y)
+
+    pairs = sorted(
+        ((score(band, j), i, j) for i, (_, _, band) in enumerate(images)
+         for j in range(len(spans))),
+        key=lambda t: t[0],
+    )
+    taken_img, taken_span, chosen = set(), set(), {}
+    for _, i, j in pairs:
+        if i in taken_img or j in taken_span:
+            continue
+        chosen[i] = j
+        taken_img.add(i)
+        taken_span.add(j)
+
+    out = []
+    for i, (img, ext, band) in enumerate(images):
+        anchor = offset
+        j = chosen.get(i)
+        if j is None and band is not None:          # more figures than labels — share
+            j = min(range(len(spans)), key=lambda k: gap(band, spans[k][0]))
+        if j is not None:
+            where = body.find(spans[j][1])
+            if where >= 0:
+                anchor = offset + where
+        out.append({"bytes": img.data, "ext": ext, "anchor": anchor})
+    return out
+
+
 def _pdf_document(data: bytes) -> dict:
     from pypdf import PdfReader
 
@@ -117,13 +254,11 @@ def _pdf_document(data: bytes) -> dict:
     pages, figures, offset = [], [], 0
     for page in reader.pages:
         body = page.extract_text() or ""
-        # anchor every figure on this page to where the page's text starts, so a figure
-        # lands on a question from the same page rather than a neighbouring one
+        # Anchoring to the START of the page — which is what this used to do — collapses
+        # every figure on a page onto one point, so a spreadsheet-style bank with ten rows
+        # per page sends all its diagrams to one question and starves the rest.
         try:
-            for img in page.images:
-                ok, ext = _usable_figure(img.data)
-                if ok:
-                    figures.append({"bytes": img.data, "ext": ext, "anchor": offset})
+            figures.extend(_anchor_figures(page, reader, body, offset))
         except Exception as e:      # a malformed XObject must never fail the upload
             log.warning("could not read images on a page: %s", e)
         pages.append(body)

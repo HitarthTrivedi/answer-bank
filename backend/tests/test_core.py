@@ -281,3 +281,96 @@ def test_the_glued_shape_never_hijacks_a_normal_bank():
     assert len(qs) == 3
     qs = extractor.heuristic_extract(ANSWER_DOC)
     assert len(qs) == 3
+
+
+# ---------------- figure placement ----------------
+
+def _pdf_with_figures_in_rows():
+    """A table-shaped PDF: three rows, the middle one holding a figure instead of text.
+    Mirrors a spreadsheet printed to PDF, which is how question banks often arrive."""
+    import io
+
+    from PIL import Image, ImageDraw
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    img = Image.new("RGB", (400, 300), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle([20, 20, 380, 280], outline="black", width=4)
+    shot = io.BytesIO()
+    img.save(shot, "PNG")
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.drawString(60, 760, "1")
+    c.drawString(90, 760, "Define normalization in DBMS.")
+    c.drawString(60, 500, "2")                       # row label BELOW its own figure
+    from reportlab.lib.utils import ImageReader
+    c.drawImage(ImageReader(io.BytesIO(shot.getvalue())), 90, 520, width=300, height=220)
+    c.drawString(60, 300, "3")
+    c.drawString(90, 300, "Compare TCP and UDP protocols.")
+    c.save()
+    return buf.getvalue()
+
+
+def test_a_figure_lands_on_its_own_row_not_the_page_start():
+    """Anchoring every figure to the start of its page put all of a page's diagrams on
+    one question and starved the rest — useless on any bank with several rows per page."""
+    pytest.importorskip("reportlab")
+    doc = ingest.extract_document(_pdf_with_figures_in_rows(), "pdf")
+    assert len(doc["figures"]) == 1, "the diagram should survive extraction"
+
+    qs = extractor.heuristic_extract(doc["text"])
+    anchor = doc["figures"][0]["anchor"]
+    owner = None
+    for i, q in enumerate(qs):
+        end = qs[i + 1]["offset"] if i + 1 < len(qs) else len(doc["text"])
+        if q["offset"] <= anchor < end:
+            owner = q
+            break
+    assert owner is not None, "the figure must belong to some question"
+    assert anchor > 0, "anchoring to the page start is the bug this guards against"
+    # row 2 is the figure row: it has no text of its own
+    assert owner["text"] == extractor.FIGURE_ONLY, \
+        f"figure landed on the wrong row: {owner['text'][:60]!r}"
+
+
+BULLETED = """Advanced Java Programming
+Unit 1: Java Networking
+4 Marks
+■ Q1. Implement the client-server program using UDP Sockets. (4 marks)
+Asked in: Summer 2023
+■ Q2. Write a TCP program that echoes the client's message. (7 marks)
+■ Q3. Explain the role of ServerSocket. (4 marks)
+"""
+
+RUN_ON = ("Question BankUNIT 11.Define: Class, Object and Inheritance."
+          "UNIT 22.Explain Software Engineering with SDLC"
+          "3.What is the purpose of a DFD in software engineering?"
+          "4.What is Android? Explain android architecture.")
+
+
+def test_bulleted_questions_are_found():
+    """A bullet glyph is not whitespace, so '■ Q1.' slipped past every anchored
+    pattern and the file extracted as zero questions."""
+    qs = extractor.heuristic_extract(BULLETED)
+    assert len(qs) == 3
+    assert qs[0]["text"].startswith("Implement the client-server")
+    assert qs[0]["marks"] == 4
+
+
+def test_a_pdf_that_extracts_as_one_long_run_still_splits():
+    """Some PDFs come out with no line breaks at all, so nothing is at the start of a
+    line. Falling back to a mid-line scan is the only way to see the questions."""
+    qs = extractor.heuristic_extract(RUN_ON)
+    assert len(qs) >= 3
+    assert any(q["text"].startswith("Explain Software Engineering") for q in qs)
+    assert any(q["text"].startswith("What is the purpose of a DFD") for q in qs)
+
+
+def test_the_inline_scan_does_not_fire_on_a_normal_document():
+    """Mid-line scanning is a last resort — it would split on decimals and version
+    numbers. It must only engage when nothing is anchored to a line start."""
+    assert all(c["kind"] != "inline" for c in extractor._candidates(PLAIN_BANK))
+    assert all(c["kind"] != "inline" for c in extractor._candidates(ANSWER_DOC))
+    assert all(c["kind"] != "inline" for c in extractor._candidates(BULLETED))

@@ -22,10 +22,13 @@ from . import providers
 
 log = logging.getLogger("prism.extractor")
 
+# Question banks are frequently bulleted ("\u25a0 Q1. Implement..."), and a bullet glyph is
+# not whitespace, so every anchored pattern below has to step over one.
+_BULLET = r"^[\s\u25a0\u25aa\u2022\u25cf\u25e6\u2023\u2043\-\*\u2212\u2013]*"
 # "Q7." / "Question 7)" — an explicit marker, which a list inside an answer never uses.
-_Q_MARKER = re.compile(r"^\s*Q(?:uestion)?\s*\.?\s*(\d{1,3})\s*[\.\):]\s*(.*)", re.IGNORECASE)
+_Q_MARKER = re.compile(_BULLET + r"Q(?:uestion)?\s*\.?\s*(\d{1,3})\s*[\.\):]\s*(.*)", re.IGNORECASE)
 # "7." / "7)" — a bare number: a question in a plain bank, but also every algorithm step.
-_NUM_LINE = re.compile(r"^\s*(\d{1,3})\s*[\.\):]\s+(.*)")
+_NUM_LINE = re.compile(_BULLET + r"(\d{1,3})\s*[\.\):]\s+(.*)")
 # "7Define AI..." — no separator at all. This is what a SPREADSHEET exported to PDF looks
 # like: the number is one cell and the question another, and the text layer just runs
 # them together. Common enough to matter, ambiguous enough to be a last resort.
@@ -33,6 +36,10 @@ _NUM_GLUED = re.compile(r"^\s*(\d{1,3})([A-Za-z\"'“‘].*)$")
 # "7" alone on a line, with the question on the line after — same spreadsheet exports,
 # when the cell wrapped.
 _NUM_ALONE = re.compile(r"^\s*(\d{1,3})\s*$")
+# "...Encapsulation.2.Explain Software Engineering..." — some PDFs extract with no line
+# breaks at all, so nothing is at the start of a line and every anchored pattern misses.
+# Last resort only: scanning mid-line for numbers is how you accidentally split on "1.5".
+_INLINE_NUM = re.compile(r"(?<![\d.])(\d{1,3})\.(?=[A-Z\"'“‘])")
 _MARKS = re.compile(r"[\(\[]\s*(\d{1,3})\s*(?:marks?|M)\s*[\)\]]|\b(\d{1,3})\s*marks?\b", re.IGNORECASE)
 
 _MARKER_CONFIDENCE = 3     # fewer explicit markers than this and they're incidental
@@ -79,6 +86,17 @@ def _candidates(raw: str) -> list[dict]:
                           if lines[j].strip()), "")
             out.append({"offset": offsets[i], "kind": "alone", "num": int(m.group(1)),
                         "opening": ahead[:_PREVIEW_CHARS] or FIGURE_ONLY})
+
+    if len(out) < _MARKER_CONFIDENCE:
+        # Almost nothing sits at the start of a line, which is what a PDF that extracted
+        # as one long run looks like. Only take the mid-line scan if it genuinely finds
+        # MORE than the anchored pass did — otherwise a perfectly good two-question bank
+        # gets its candidates thrown away and the upload reports "no questions detected".
+        inline = [{"offset": m.start(), "kind": "inline", "num": int(m.group(1)),
+                   "opening": raw[m.end():m.end() + _PREVIEW_CHARS].strip()}
+                  for m in _INLINE_NUM.finditer(raw)]
+        if len(inline) > len(out):
+            out = inline
     return out[:_MAX_CANDIDATES]
 
 
@@ -88,17 +106,17 @@ def _build(raw: str, kept: list[dict]) -> list[dict]:
     for i, c in enumerate(kept):
         end = kept[i + 1]["offset"] if i + 1 < len(kept) else len(raw)
         body = " ".join(raw[c["offset"]:end].split())
-        # drop the leading "Q7." / "7." / "7" — the number is positional, not part of the
-        # question. Try each shape; whichever matches, keep only what followed it.
+        # Drop the leading "Q7." / "7." / "7" — the number is positional, not part of the
+        # question. Whichever shape matches, keep only what followed it.
         for pattern in (_Q_MARKER, _NUM_LINE, _NUM_GLUED):
             m = pattern.match(body)
             if m:
                 body = (m.group(2) or "").strip()
                 break
         else:
-            # a bare number, with its text on a following line — or with no text at all,
-            # which means the question itself is a picture
-            body = re.sub(r"^\s*\d{1,3}\b\s*", "", body)
+            # a bare number with its text on a following line, an inline "7.Define", or
+            # nothing at all — which means the question itself is a picture
+            body = re.sub(r"^\s*\d{1,3}\s*\.?\s*", "", body)
         # a row with no text is a question whose content is a figure — keep it, marked,
         # rather than silently losing it
         out.append(_finish(body.strip() or FIGURE_ONLY, c["offset"]))
@@ -177,7 +195,7 @@ def heuristic_extract(raw: str) -> list[dict]:
     actually offers and ignore the weaker ones — mixing them is what shreds a document.
     """
     cands = _candidates(raw)
-    for tier in ("marker", "number"):
+    for tier in ("marker", "number", "inline"):
         hits = [c for c in cands if c["kind"] == tier]
         if len(hits) >= _MARKER_CONFIDENCE:
             return _build(raw, hits)
