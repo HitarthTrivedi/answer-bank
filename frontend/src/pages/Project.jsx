@@ -211,7 +211,7 @@ export default function Project() {
       {['processing', 'done'].includes(project.status) && (
         <div className="space-y-4">
           {project.questions.map((q) => (
-            <AnswerCard key={q.id} q={q} onChanged={load} />
+            <AnswerCard key={q.id} q={q} projectId={id} onChanged={load} />
           ))}
         </div>
       )}

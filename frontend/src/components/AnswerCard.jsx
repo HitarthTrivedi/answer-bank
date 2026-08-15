@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
+import { isInstalled, startRun } from '../extension'
 import Markdown from './Markdown'
 
 const TYPE_META = {
@@ -16,12 +17,12 @@ const ENGINE_LABEL = {
   cache: () => 'class cache ⚡',
 }
 
-export default function AnswerCard({ q, onChanged }) {
+export default function AnswerCard({ q, projectId, onChanged }) {
   return (
     <div id={`q-${q.idx}`} className="rounded-xl border border-slate-800 bg-slate-900/50">
       <QuestionHeader q={q} />
       {q.status === 'answered' && q.answer && <AnswerBody q={q} onChanged={onChanged} />}
-      {q.status === 'assist_waiting' && <AssistBody q={q} onChanged={onChanged} />}
+      {q.status === 'assist_waiting' && <AssistBody q={q} projectId={projectId} onChanged={onChanged} />}
       {(q.status === 'pending' || q.status === 'answering') && (
         <div className="flex items-center gap-2 px-5 pb-5 text-sm text-slate-500">
           {q.status === 'answering' ? (
@@ -209,9 +210,14 @@ const AI_TABS = [
   ['Gemini', 'https://gemini.google.com'],
 ]
 
-function AssistBody({ q, onChanged }) {
+const SITE_NAMES = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }
+
+function AssistBody({ q, projectId, onChanged }) {
   const [paste, setPaste] = useState('')
   const [busy, setBusy] = useState(false)
+  const [manual, setManual] = useState(false)
+  const hasExt = isInstalled()
+  const routedTo = SITE_NAMES[q.target_site] || 'your AI'
 
   const submit = async () => {
     setBusy(true)
@@ -220,13 +226,54 @@ function AssistBody({ q, onChanged }) {
     finally { setBusy(false) }
   }
 
+  const run = async () => {
+    try { await startRun(projectId); onChanged() }
+    catch (e) { alert(e.message) }
+  }
+
+  // The automated path is the product; pasting by hand is the fallback. Leading with the
+  // paste box made the fallback look like normal operation, so a broken extension read
+  // as "this is just how it works".
+  if (!manual) {
+    return (
+      <div className="border-t border-indigo-500/20 bg-indigo-500/[0.04] px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-indigo-200">
+            {hasExt ? (
+              <>Waiting to be answered in <span className="font-semibold">{routedTo}</span>.</>
+            ) : (
+              <><span className="font-semibold">Extension not installed.</span>{' '}
+                Install it and these answer themselves — one fresh chat per question.</>
+            )}
+          </p>
+          <div className="flex gap-2">
+            {hasExt && (
+              <button onClick={run}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold hover:bg-indigo-500">
+                Answer with my AI
+              </button>
+            )}
+            <button onClick={() => setManual(true)}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500">
+              Paste it myself
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="border-t border-amber-500/20 bg-amber-500/[0.04] px-5 py-4">
-      <p className="mb-3 text-sm text-amber-300/90">
-        <span className="font-semibold">Your turn:</span> this question is routed to your own AI.
-        Copy the crafted prompt, paste it into any AI tab, then paste the answer back — it will be
-        formatted, verified and included in the document like every other answer.
-      </p>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <p className="text-sm text-amber-300/90">
+          <span className="font-semibold">Doing this one by hand:</span> copy the prompt, paste it
+          into any AI tab, then paste the answer back — it is formatted, verified and included in
+          the document exactly like an automated one.
+        </p>
+        <button onClick={() => setManual(false)}
+          className="shrink-0 text-xs text-slate-500 hover:text-slate-300">back</button>
+      </div>
       <CopyBox text={q.assist_prompt} />
       <div className="my-2 flex flex-wrap gap-2 text-xs">
         {AI_TABS.map(([name, url]) => (
