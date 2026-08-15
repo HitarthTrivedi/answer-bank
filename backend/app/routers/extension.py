@@ -12,7 +12,11 @@ than 30 on one — and it cuts wall-clock time by roughly the batch size.
 Each question still gets its own brand-new chat. Parallel across assistants is not the
 same as batched into one thread, which is the failure this product exists to fix.
 """
+import base64
+import io
+import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -22,6 +26,14 @@ from ..db import get_db
 from ..models import Project, Question, User
 from ..security import current_user
 from ..services.queue import expire_leases
+
+log = logging.getLogger("prism.extension")
+
+# Figures ride along inside the batch payload as base64. Downscaled first: an AI reads a
+# 1400px graph exactly as well as a 4000px one, and the smaller payload keeps the
+# message hop to the content script quick.
+MAX_FIGURE_PX = 1400
+MAX_FIGURE_BYTES = 1_500_000
 
 router = APIRouter(prefix="/api/extension", tags=["extension"])
 
@@ -59,6 +71,36 @@ def projects_needing_work(user: User = Depends(current_user), db: Session = Depe
                 "total": len(p.questions), "waiting": waiting,
                 "answered": sum(1 for q in p.questions if q.status == "answered"),
             })
+    return out
+
+
+def _figure_payload(q: Question) -> list[dict]:
+    """The question's figures, downscaled, base64'd, ready for the extension to paste
+    into the chat. We never look at what they contain — the student's own AI reads them,
+    which costs us nothing and is better than any OCR we could run."""
+    out = []
+    for fig in q.figures:
+        path = Path(fig.path)
+        if not path.exists():
+            continue
+        try:
+            raw = path.read_bytes()
+            from PIL import Image
+
+            with Image.open(io.BytesIO(raw)) as im:
+                if max(im.size) > MAX_FIGURE_PX or len(raw) > MAX_FIGURE_BYTES:
+                    im = im.convert("RGB")
+                    im.thumbnail((MAX_FIGURE_PX, MAX_FIGURE_PX), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    im.save(buf, format="JPEG", quality=85)
+                    raw = buf.getvalue()
+                    mime = "image/jpeg"
+                else:
+                    mime = "image/png" if fig.ext == "png" else "image/jpeg"
+            out.append({"id": fig.id, "mime": mime,
+                        "data": base64.b64encode(raw).decode()})
+        except Exception as e:
+            log.warning("skipping unreadable figure %s: %s", fig.id, e)
     return out
 
 
@@ -132,6 +174,7 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
             "prompt": q.assist_prompt,
             "site": site,
             "route_reason": q.route_reason,
+            "figures": _figure_payload(q),
         })
     db.commit()
 

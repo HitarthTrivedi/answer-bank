@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import DATA_DIR, get_settings
 from ..db import SessionLocal, get_db
-from ..models import Answer, AnswerAsset, Project, Question, User
+from ..models import Answer, AnswerAsset, Figure, Project, Question, User
 from ..security import audit, client_ip, current_user
 from ..services import billing, cache, diagrams, export, extractor, ingest, solver, verify
 from ..services.queue import wake
@@ -48,6 +48,9 @@ def _question_dict(q: Question) -> dict:
         "id": q.id, "idx": q.idx, "text": q.text, "marks": q.marks,
         "status": q.status, "qtype": q.qtype, "route_reason": q.route_reason,
         "error": q.error, "target_site": q.target_site,
+        "figures": [{"id": f.id, "url": f"/api/figures/{f.id}"} for f in q.figures],
+        # flags a question that points at something the AI cannot see
+        "needs_figure": extractor.mentions_a_figure(q.text) and not q.figures,
         # still offered while a tab holds the lease, so a student can always paste by hand
         "assist_prompt": q.assist_prompt if q.status in ("assist_waiting", "assist_running") else "",
         "answer": None,
@@ -91,13 +94,14 @@ async def create_project(
     if file is None and not text.strip():
         raise HTTPException(400, "Provide a file or pasted text")
 
-    raw_text, source_name = text, "pasted text"
+    raw_text, source_name, figures = text, "pasted text", []
     if file is not None:
         data = await file.read()
         safe_name = re.sub(r"[^\w.\- ]", "_", file.filename or "upload")[:120]
         kind = ingest.validate_upload(data, safe_name)
         (DATA_DIR / "uploads" / f"{uuid.uuid4().hex}.{kind}").write_bytes(data)  # retained for re-extraction/debug
-        raw_text = ingest.extract_text(data, kind)
+        doc = ingest.extract_document(data, kind)
+        raw_text, figures = doc["text"], doc["figures"]
         source_name = safe_name
 
     if len(raw_text.strip()) < 12:
@@ -107,7 +111,16 @@ async def create_project(
                       source_filename=source_name, raw_text=raw_text[:500_000])
     db.add(project)
     db.commit()
-    audit(db, "project_created", user.id, detail=f"{project.id} ({source_name})", ip=client_ip(request))
+
+    for fig in figures:
+        path = DATA_DIR / "assets" / f"fig_{uuid.uuid4().hex}.{fig['ext']}"
+        path.write_bytes(fig["bytes"])
+        db.add(Figure(project_id=project.id, anchor=fig["anchor"], path=str(path), ext=fig["ext"]))
+    if figures:
+        db.commit()
+
+    audit(db, "project_created", user.id,
+          detail=f"{project.id} ({source_name}, {len(figures)} figure(s))", ip=client_ip(request))
 
     asyncio.create_task(_run_extraction(project.id))
     return _project_dict(project)
@@ -126,8 +139,14 @@ async def _run_extraction(project_id: str) -> None:
                 project.error = ("No questions detected. Number them like '1.' / 'Q2)' "
                                  "or edit the text and try again.")
             else:
-                for i, q in enumerate(found[:get_settings().max_questions_per_bank]):
-                    db.add(Question(project_id=project.id, idx=i, text=q["text"][:4000], marks=q["marks"]))
+                kept = found[:get_settings().max_questions_per_bank]
+                rows = []
+                for i, q in enumerate(kept):
+                    row = Question(project_id=project.id, idx=i, text=q["text"][:4000], marks=q["marks"])
+                    db.add(row)
+                    rows.append((row, q.get("offset", 0)))
+                db.flush()
+                _attach_figures(db, project, rows)
                 project.status = "review"
         except Exception as e:
             log.exception("extraction failed for %s", project_id)
@@ -136,6 +155,27 @@ async def _run_extraction(project_id: str) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _attach_figures(db, project: Project, rows: list) -> None:
+    """Give each figure to the question whose text span contains it.
+
+    Position is all we have and it is usually right: a figure sits with the question that
+    refers to it. Deliberately conservative — a figure past the last question, or in a
+    project with no questions, stays unattached rather than being guessed onto something.
+    A wrong figure is worse than none, because the AI answers confidently about it.
+    """
+    figures = db.query(Figure).filter_by(project_id=project.id).order_by(Figure.anchor).all()
+    if not figures or not rows:
+        return
+    bounds = [(row, start, rows[i + 1][1] if i + 1 < len(rows) else None)
+              for i, (row, start) in enumerate(rows)]
+    for fig in figures:
+        for row, start, end in bounds:
+            if fig.anchor >= start and (end is None or fig.anchor < end):
+                fig.question_id = row.id
+                break
+    db.commit()
 
 
 # ---------------------------------------------------------------- read / edit / delete
@@ -364,6 +404,18 @@ def graph_png(answer_id: str, key: str, user: User = Depends(current_user), db: 
                 db.commit()
             return Response(png, media_type="image/png")
     raise HTTPException(404, "No graphspec with this key in the answer")
+
+
+@router.get("/figures/{figure_id}")
+def get_figure(figure_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    fig = db.get(Figure, figure_id)
+    if fig is None or fig.project.user_id != user.id:
+        raise HTTPException(404, "Figure not found")
+    path = Path(fig.path)
+    if not path.exists():
+        raise HTTPException(404, "Figure file is missing")
+    return Response(path.read_bytes(),
+                    media_type="image/png" if fig.ext == "png" else "image/jpeg")
 
 
 # ---------------------------------------------------------------- export

@@ -184,6 +184,14 @@ def build_docx(project: Project, db, buyer: str = "") -> bytes:
             meta = doc.add_paragraph()
             meta.add_run(f"[{q.marks} marks]").italic = True
 
+        # the figure the question refers to, so the document stands on its own
+        for fig in q.figures:
+            try:
+                with open(fig.path, "rb") as f:
+                    _add_image(doc, f.read(), width_in=4.5)
+            except OSError:
+                pass
+
         if q.answer is None:
             doc.add_paragraph("— not answered yet —").runs[0].italic = True
         else:

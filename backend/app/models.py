@@ -77,9 +77,34 @@ class Question(Base):
     error: Mapped[str] = mapped_column(Text, default="")
 
     project: Mapped["Project"] = relationship(back_populates="questions")
+    figures: Mapped[list["Figure"]] = relationship(
+        primaryjoin="Question.id == Figure.question_id", viewonly=True
+    )
     answer: Mapped["Answer | None"] = relationship(
         back_populates="question", cascade="all, delete-orphan", uselist=False
     )
+
+
+class Figure(Base):
+    """An image lifted out of the uploaded file — a plotted graph, a circuit, a table
+    someone screenshotted. We never interpret it: the student's own browser AI reads it
+    when it answers, which costs us nothing and beats any OCR we could run.
+
+    `anchor` is the character offset in the project's raw text where the figure sat,
+    which is how it finds its way onto the right question.
+    """
+    __tablename__ = "figures"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    question_id: Mapped[str | None] = mapped_column(
+        ForeignKey("questions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    anchor: Mapped[int] = mapped_column(Integer, default=0)
+    path: Mapped[str] = mapped_column(String(500))
+    ext: Mapped[str] = mapped_column(String(8), default="png")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    project: Mapped["Project"] = relationship()
 
 
 class Answer(Base):

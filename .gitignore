@@ -10,3 +10,7 @@ dist/
 .pytest_cache/
 .idea/
 backend/test_*.db*
+
+# reference material, not part of the product
+AI.pdf
+*.pdf

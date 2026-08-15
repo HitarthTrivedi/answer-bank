@@ -132,6 +132,17 @@ the whole run from its own page. Installing the extension is the entire setup.
   which assistants the student isn't signed into.
 - **Server-side DOM selectors** (`backend/extension_selectors.json`) served at
   `/api/extension/config` — the site-redesign hotfix channel (§7).
+- **Figures.** Images embedded in an uploaded PDF/DOCX are extracted (`ingest.py`),
+  anchored to a character offset, matched to the question whose text span contains them,
+  shipped in the batch payload as base64, and pasted into the chat by the driver. They
+  also land in the exported DOCX. **We never interpret them** — no OCR, no vision model,
+  no cost; the student's own AI reads them.
+- **Figure detector.** `extractor.mentions_a_figure()` flags a question that references a
+  figure we couldn't find, at the review step. Without it those are answered blind and the
+  AI invents a confident answer about a graph it never saw.
+- **House style.** The solver prompt now pushes tables over prose for anything with
+  parallel structure (step traces, comparisons, edge costs), taken from a marked-up
+  reference answer document.
 - **Buyer's name on the DOCX cover** — mild anti-forwarding friction, not DRM.
 - **SQLite column migration** (`db.migrate_columns`) — idempotent, runs on boot.
   Verified against a live DB with existing rows.
@@ -169,6 +180,11 @@ document.querySelector("button[data-testid='send-button']")   // send
 document.querySelectorAll("[data-message-author-role='assistant']").length
 ```
 Fix the JSON, restart the backend, re-run. No extension reinstall needed.
+
+**P0-1b. Verify image paste against the live sites.** The driver attaches figures with a
+synthetic paste carrying a `File`. That is the same mechanism as the text paste, so it
+should work — but it has never run against a real composer, and free tiers often cap
+vision requests separately from message limits. Test with a bank containing a real figure.
 
 **P0-2. End-to-end extension run.** Load unpacked (`chrome://extensions` → Developer
 mode → `extension/`), reload the app, run a 5-question bank, check the DOCX. Watch for: answers
@@ -274,6 +290,15 @@ their problem, not ours.
 reasoning tokens count against the completion budget (240–370 observed for a one-line
 classification). Set it too low and the model spends the whole allowance thinking, then
 returns empty content. Free models cost nothing, so there is no reason to be tight.
+
+**Prefer text to pixels.** The reference answer document this style came from covers A*
+search, game trees and Bayesian networks across 23 pages with *zero* images — the data
+lives in tables. Reach for a table before a figure; it reads better, exports cleanly, and
+costs nothing to generate.
+
+**Never interpret a figure server-side.** No OCR, no vision API. The pixels go to the
+student's AI, which is better at it and already paid for. Adding tesseract would be more
+work for a worse result and a bill.
 
 **The prompt is the product.** `solver.py` is the only lever on answer quality now that
 we don't choose the model. Treat changes there as product changes, not refactors.

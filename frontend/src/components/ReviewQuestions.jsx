@@ -11,8 +11,11 @@ import ExtensionNeeded from './ExtensionNeeded'
 
 export default function ReviewQuestions({ project, onStarted }) {
   const [questions, setQuestions] = useState(
-    project.questions.map((q) => ({ text: q.text, marks: q.marks })),
+    project.questions.map((q) => ({
+      text: q.text, marks: q.marks, figures: q.figures || [], needsFigure: q.needs_figure,
+    })),
   )
+  const missing = questions.filter((q) => q.needsFigure).length
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const hasExt = isInstalled()
@@ -48,6 +51,13 @@ export default function ReviewQuestions({ project, onStarted }) {
         <span className="font-semibold">Review before answering:</span> we extracted{' '}
         {questions.length} question{questions.length === 1 ? '' : 's'}. Fix any splits or typos and
         confirm marks — answer depth follows the marks.
+        {missing > 0 && (
+          <p className="mt-2 text-amber-300">
+            <span className="font-semibold">{missing} question{missing === 1 ? '' : 's'}</span> refer
+            to a figure we couldn't pull out of your file. Your AI will answer them without it —
+            delete them, or paste the figure into the chat yourself when it runs.
+          </p>
+        )}
       </div>
 
       <div className="space-y-3">
@@ -59,6 +69,24 @@ export default function ReviewQuestions({ project, onStarted }) {
               value={q.text}
               onChange={(e) => update(i, { text: e.target.value })}
             />
+            {q.figures?.length > 0 && (
+              <div className="flex flex-col gap-1">
+                {q.figures.map((f) => (
+                  <img
+                    key={f.id} src={f.url} alt="figure from your file"
+                    className="h-16 w-24 rounded border border-slate-700 bg-white object-contain"
+                  />
+                ))}
+                <span className="text-center text-[10px] text-slate-500">attached</span>
+              </div>
+            )}
+            {q.needsFigure && (
+              <div className="flex w-24 flex-col items-center justify-center gap-1 rounded border border-dashed border-amber-500/40 p-1">
+                <span className="text-center text-[10px] leading-tight text-amber-400">
+                  mentions a figure we couldn't find
+                </span>
+              </div>
+            )}
             <div className="flex flex-col items-end gap-2">
               <input
                 type="number" min="1" max="100" placeholder="marks"

@@ -61,6 +61,13 @@ upload → extract questions (regex) → student reviews/edits → queue:
   the browser at all.
 - **Marks-aware depth**: "(2 marks)" gets 3 crisp lines; "(10 marks)" gets a full
   structured answer.
+- **Tables over pictures.** The house style pushes structured text wherever it works — a
+  search trace is a step table, a comparison is a parameter table, a state space is an
+  edge-cost table. It reads better, exports cleanly to DOCX, and costs nothing to produce.
+- **Figures cost us nothing.** Images embedded in an uploaded PDF/DOCX are extracted,
+  matched to the question they sit with, and pasted into the chat alongside the prompt —
+  so the student's own AI does the vision. No OCR, no vision API, no tesseract. A question
+  that names a figure we couldn't find is flagged at review rather than answered blind.
 
 ## Making money
 

@@ -211,3 +211,89 @@ def test_one_students_bank_is_invisible_to_another(client, auth):
     mine = client.get("/api/projects", headers=auth).json()[0]["id"]
     assert client.get(f"/api/projects/{mine}/export", headers=hdr).status_code == 404
     assert client.get(f"/api/extension/work?project_id={mine}", headers=hdr).json()["done"] is True
+
+
+# ---------------- figures ----------------
+
+
+def _docx_with_figure():
+    """A one-question DOCX carrying an inline image, built in memory."""
+    import io
+
+    import docx
+    from docx.shared import Inches
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), (30, 60, 120)).save(buf, format="PNG")
+
+    d = docx.Document()
+    d.add_paragraph("1. Define normalization in DBMS. (5 marks)")
+    d.add_paragraph("2. From the graph in Fig. 1, determine the time constant. (10 marks)")
+    d.add_picture(io.BytesIO(buf.getvalue()), width=Inches(3))
+    out = io.BytesIO()
+    d.save(out)
+    return out.getvalue()
+
+
+def test_a_figure_survives_upload_and_lands_on_the_right_question(client, auth):
+    r = client.post("/api/projects", headers=auth,
+                    data={"title": "Figure Bank"},
+                    files={"file": ("bank.docx", _docx_with_figure(),
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    p = wait_for(client, auth, pid, lambda p: p["status"] in ("review", "error"))
+    assert p["status"] == "review", p
+
+    by_idx = {q["idx"]: q for q in p["questions"]}
+    # the picture follows Q2 in the document, so it belongs to Q2 — not Q1
+    assert by_idx[0]["figures"] == []
+    assert len(by_idx[1]["figures"]) == 1
+
+    # and a question that names a figure it HAS is not flagged as missing one
+    assert by_idx[1]["needs_figure"] is False
+
+    # the image is actually served
+    img = client.get(by_idx[1]["figures"][0]["url"], headers=auth)
+    assert img.status_code == 200
+    assert img.content[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0")
+
+
+def test_a_question_naming_a_figure_it_lacks_is_flagged(client, auth):
+    bank = ("1. Explain the OSI model layers. (10 marks)\n"
+            "2. From the graph shown above, find the peak voltage. (5 marks)\n")
+    r = client.post("/api/projects", data={"title": "No Figure Bank", "text": bank}, headers=auth)
+    pid = r.json()["id"]
+    p = wait_for(client, auth, pid, lambda p: p["status"] == "review")
+    by_idx = {q["idx"]: q for q in p["questions"]}
+    assert by_idx[0]["needs_figure"] is False
+    assert by_idx[1]["needs_figure"] is True, "a figure reference with no figure must be flagged"
+
+
+def test_the_extension_receives_the_figure_and_the_prompt_says_so(client, auth):
+    pid = [p["id"] for p in client.get("/api/projects", headers=auth).json()
+           if p["title"] == "Figure Bank"][0]
+    client.post(f"/api/projects/{pid}/start", headers=auth)
+    wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
+
+    batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    withfig = [b for b in batch if b["figures"]]
+    assert withfig, "the batch must carry the figure to the browser"
+    item = withfig[0]
+    assert item["figures"][0]["mime"] in ("image/png", "image/jpeg")
+    assert len(item["figures"][0]["data"]) > 100          # real base64, not a stub
+    # the AI must be told an image is attached, or it will answer from the text alone
+    assert "FIGURE FOR THIS QUESTION IS ATTACHED" in item["prompt"]
+
+
+def test_a_figure_is_never_leaked_across_accounts(client, auth):
+    pid = [p["id"] for p in client.get("/api/projects", headers=auth).json()
+           if p["title"] == "Figure Bank"][0]
+    fid = [q for q in client.get(f"/api/projects/{pid}", headers=auth).json()["questions"]
+           if q["figures"]][0]["figures"][0]["id"]
+    other = client.post("/api/auth/register", json={
+        "email": "peeker@test.dev", "name": "Peeker", "password": "supersecret1"}).json()
+    hdr = {"Authorization": f"Bearer {other['access_token']}"}
+    assert client.get(f"/api/figures/{fid}", headers=hdr).status_code == 404
+    assert client.get(f"/api/figures/{fid}").status_code == 401

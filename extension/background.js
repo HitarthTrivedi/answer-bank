@@ -167,7 +167,9 @@ async function waitForAnswer(tabId, cfg, site) {
 async function answerOne(item, cfg, sites) {
   const site = { key: item.site, ...sites[item.site] }
   const tab = await freshChatTab(site)
-  const sent = await tell(tab.id, { type: 'AB_SEND', text: item.prompt, site })
+  const sent = await tell(tab.id, {
+    type: 'AB_SEND', text: item.prompt, site, figures: item.figures || [],
+  })
   if (!sent.ok) throw new Error(sent.error)
 
   const markdown = await waitForAnswer(tab.id, cfg, site)

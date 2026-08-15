@@ -34,6 +34,37 @@ function pickAll(selectors) {
 
 // ---------------------------------------------------------------- input
 
+/** base64 -> File, so a figure can ride the same paste event as the prompt. */
+function toFile(fig, i) {
+  const bin = atob(fig.data)
+  const bytes = new Uint8Array(bin.length)
+  for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j)
+  const ext = fig.mime === 'image/png' ? 'png' : 'jpg'
+  return new File([bytes], `figure-${i + 1}.${ext}`, { type: fig.mime })
+}
+
+/** Attach the question's figures to the composer.
+ *
+ *  This is where the product gets its image handling for free: ChatGPT, Claude and
+ *  Gemini all read a pasted image, and it's the student's own subscription paying for
+ *  the vision. Our server never looks at the pixels. */
+function attachFigures(el, figures) {
+  if (!figures || !figures.length) return 0
+  let attached = 0
+  for (let i = 0; i < figures.length; i++) {
+    try {
+      const dt = new DataTransfer()
+      dt.items.add(toFile(figures[i], i))
+      el.focus()
+      el.dispatchEvent(new ClipboardEvent('paste', {
+        clipboardData: dt, bubbles: true, cancelable: true,
+      }))
+      attached++
+    } catch (e) { /* a site that refuses images still gets the text */ }
+  }
+  return attached
+}
+
 // React/ProseMirror/Quill/Lexical all ignore direct .value or .textContent writes —
 // their internal model never learns about the change and the send button stays disabled.
 // A synthetic paste event is the one approach all four honour.
@@ -133,8 +164,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
 
       baselineTurns = assistantTurns().length
       clearComposer(composer)
+
+      // figures first: the upload has to be accepted before we hit send, and pasting
+      // text afterwards keeps the caret in the composer where the site expects it
+      const attached = attachFigures(composer, msg.figures)
+
       const inserted = insertText(composer, msg.text)
       if (!inserted) { respond({ ok: false, error: 'insert_failed' }); return true }
+
+      // an image upload needs a moment to land before the site will let you send
+      const settleForUpload = attached ? 1500 : 200
 
       // the send button enables a tick after the editor model updates
       let tries = 0
@@ -142,13 +181,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         const btn = pick(SITE.send)
         if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
           btn.click()
-          respond({ ok: true, baseline: baselineTurns })
+          respond({ ok: true, baseline: baselineTurns, figuresAttached: attached })
           return
         }
-        if (++tries > 20) { respond({ ok: false, error: 'send_button_unavailable' }); return }
+        if (++tries > 40) { respond({ ok: false, error: 'send_button_unavailable' }); return }
         setTimeout(clickSend, 150)
       }
-      setTimeout(clickSend, 200)
+      setTimeout(clickSend, settleForUpload)
       return true
     }
 

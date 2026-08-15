@@ -46,6 +46,11 @@ non-negotiable: 40 questions in one thread is the exact failure Prism exists to 
 Running three *assistants* in parallel is not the same thing as batching three questions
 into one thread — each still gets its own empty chat.
 
+**Figures ride along.** If a question has an image attached, the driver pastes it into
+the composer before the prompt, using the same synthetic-paste mechanism. That is where
+the product gets image understanding for free: ChatGPT, Claude and Gemini all read a
+pasted figure, on the student's own subscription. The server never looks at the pixels.
+
 **Leases stop double work.** The server marks a handed-out question `assist_running`; if
 a tab is closed mid-answer the lease expires and the question returns to the pool.
 
