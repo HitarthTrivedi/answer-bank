@@ -32,6 +32,42 @@ function pickAll(selectors) {
   return []
 }
 
+// ---------------------------------------------------------------- failure evidence
+//
+// When a selector misses, the driver is the only thing looking at the page — so a bare
+// "composer_not_found" throws away the one chance to see WHY. These describe what is
+// actually there, in the stable-attribute-first form a fixed selector would use, and the
+// description rides the error back to the Prism server (the student's own backend, and
+// nowhere else). Debugging a broken site then means reading the server log, not asking
+// a student to open a console.
+
+function describe(el) {
+  if (el.dataset && el.dataset.testid) return `${el.tagName.toLowerCase()}[data-testid="${el.dataset.testid}"]`
+  if (el.id) return `${el.tagName.toLowerCase()}#${el.id}`
+  const aria = el.getAttribute('aria-label')
+  if (aria) return `${el.tagName.toLowerCase()}[aria-label="${aria}"]`
+  const cls = (el.className || '').toString().trim().split(/\s+/).filter(Boolean)[0]
+  return el.tagName.toLowerCase() + (cls ? '.' + cls : '')
+}
+
+function onPage(kind) {
+  const seen = kind === 'composer'
+    ? [...document.querySelectorAll('[contenteditable="true"], textarea')]
+    : [...document.querySelectorAll('button, [role="button"]')].filter((b) => {
+        const hay = ((b.getAttribute('aria-label') || '') + ' ' +
+                     ((b.dataset && b.dataset.testid) || '')).toLowerCase()
+        return hay.includes('send') || hay.includes('submit') || hay.includes('stop')
+      })
+  const visible = seen.filter((el) => {
+    const r = el.getBoundingClientRect()
+    return r.width > 0 && r.height > 0
+  })
+  return visible.slice(0, 4).map(describe).join(', ') || 'nothing matching'
+}
+
+const missing = (what, kind) =>
+  ({ ok: false, error: `${what} @ ${location.hostname} — on the page instead: ${onPage(kind)}` })
+
 // ---------------------------------------------------------------- input
 
 /** base64 -> File, so a figure can ride the same paste event as the prompt. */
@@ -161,7 +197,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg.type === 'AB_ATTACH') {
       SITE = msg.site
       const composer = pick(SITE.composer)
-      if (!composer) { respond({ ok: false, error: 'composer_not_found' }); return true }
+      if (!composer) { respond(missing('composer_not_found', 'composer')); return true }
       try {
         const bin = atob(msg.data)
         const bytes = new Uint8Array(bin.length)
@@ -182,7 +218,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg.type === 'AB_SEND') {
       SITE = msg.site
       const composer = pick(SITE.composer)
-      if (!composer) { respond({ ok: false, error: 'composer_not_found' }); return true }
+      if (!composer) { respond(missing('composer_not_found', 'composer')); return true }
       if (isLoggedOut()) { respond({ ok: false, error: 'logged_out' }); return true }
 
       baselineTurns = assistantTurns().length
@@ -207,7 +243,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
           respond({ ok: true, baseline: baselineTurns, figuresAttached: attached })
           return
         }
-        if (++tries > 40) { respond({ ok: false, error: 'send_button_unavailable' }); return }
+        if (++tries > 40) { respond(missing('send_button_unavailable', 'button')); return }
         setTimeout(clickSend, 150)
       }
       setTimeout(clickSend, settleForUpload)
