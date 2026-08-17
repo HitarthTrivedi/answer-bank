@@ -119,7 +119,7 @@ def test_every_uncached_question_is_parked_for_the_students_own_ai(client, auth)
 
     # answering through the normal assist route clears it
     r = client.post(f"/api/questions/{work['question_id']}/assist",
-                    json={"content_md": "**Given** ...\n\nFINAL: 48"}, headers=auth)
+                    json={"content_md": "**Given** 3, 9, 4, 7 → sorted 3, 4, 7, 9\n\nMedian = (4+7)/2\n\nFINAL: 5.5\n\n```verify\n(4+7)/2\n```"}, headers=auth)
     assert r.status_code == 200
     after = client.get(f"/api/extension/work?project_id={pid}", headers=auth).json()
     assert after["question_id"] != work["question_id"]
@@ -356,6 +356,59 @@ def test_the_review_save_keeps_figures_and_the_number_in_the_paper(client, auth)
         "questions": [{"id": q["id"], "text": q["text"], "marks": q["marks"]} for q in keep]}).json()
     assert len(trimmed["questions"]) == len(keep)
     assert figure_q["id"] not in [q["id"] for q in trimmed["questions"]]
+
+
+def test_a_cant_answer_reply_is_never_accepted_as_an_answer(client, auth):
+    """The incident this guards against: a document upload failed, the AI replied "No file
+    appears to be attached to this chat", and that sentence was accepted, stored, CACHED,
+    and served 15 more times. A refusal must bounce — the question goes back to waiting
+    and the extension retries elsewhere."""
+    pid = _started_project(client, auth, "Refusal Bank",
+                           text="1. Explain the OSI model layers in detail. (10 marks)\n"
+                                "2. Compare TCP and UDP protocols. (5 marks)\n"
+                                "3. Define normalization with examples. (5 marks)\n")
+    work = client.get(f"/api/extension/work?project_id={pid}", headers=auth).json()
+
+    for bad in [
+        "No file appears to be attached to this chat — the uploads folder is empty. Please re-upload it.",
+        "I cannot see the document you're referring to. Could you please attach the file again?",
+        "The question content (image or text) is missing from the provided prompt. To proceed, please paste it.",
+        "NOT_FOUND",
+        "Sure, happy to help!",   # shrug-length is not an answer either
+    ]:
+        r = client.post(f"/api/questions/{work['question_id']}/assist",
+                        json={"content_md": bad}, headers=auth)
+        assert r.status_code == 422, f"accepted a non-answer: {bad!r}"
+
+    # the question is back in the pool, not stuck answered-with-garbage
+    p = client.get(f"/api/projects/{pid}", headers=auth).json()
+    q = [x for x in p["questions"] if x["id"] == work["question_id"]][0]
+    assert q["status"] == "assist_waiting"
+
+    # and a real answer that merely DISCUSSES missing data sails through
+    real = ("**Definition:** normalization organises relational tables to remove redundancy.\n\n"
+            "If an attribute's value is missing from the provided data, 1NF still requires the "
+            "cell to hold an atomic value.\n\n**Takeaway:** normalize to 3NF for exam answers.")
+    r = client.post(f"/api/questions/{work['question_id']}/assist",
+                    json={"content_md": real}, headers=auth)
+    assert r.status_code == 200
+
+
+def test_refusals_and_shrugs_never_enter_the_class_cache(client, auth):
+    """Belt to the endpoint's braces: even if a refusal reaches cache.store by another
+    path, it must not be stored — a cached wrong answer is wrong for the whole class."""
+    from app.db import SessionLocal
+    from app.services import cache
+
+    db = SessionLocal()
+    try:
+        for bad in ["No file appears to be attached to this chat, please re-upload.",
+                    "Too short."]:
+            cache.store(db, "unique refusal-cache probe q?", 5, "theory",
+                        content_md=bad, provider="assist", model="x", verified=None)
+            assert cache.lookup(db, "unique refusal-cache probe q?", 5, "theory") is None
+    finally:
+        db.close()
 
 
 def test_a_whole_bank_is_routed_in_one_call(client, auth):

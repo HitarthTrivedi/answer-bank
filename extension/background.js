@@ -230,26 +230,37 @@ async function ask(item, cfg, sites, { prompt, doc, figures }) {
  *
  *  A paper the AI can't locate the question in isn't a lost question: it says NOT_FOUND
  *  and we retry once from the extracted text, with any figure we managed to anchor. */
-async function answerOne(item, cfg, sites) {
-  let markdown = null
-
-  if (item.document) {
-    markdown = await ask(item, cfg, sites, {
-      prompt: item.prompt, doc: item.document, figures: [],
-    })
-    if (markdown.trim().startsWith('NOT_FOUND')) markdown = null
-  }
-
-  if (markdown === null) {
-    markdown = await ask(item, cfg, sites, {
-      prompt: item.fallback_prompt || item.prompt,
-      figures: item.figures || [],
-    })
-  }
-
+async function submitAnswer(item, markdown) {
   await apiFetch(`/questions/${item.question_id}/assist`, {
     method: 'POST', body: { content_md: markdown },
   })
+}
+
+async function answerOne(item, cfg, sites) {
+  // First try: against the paper itself, when there is one. Two ways that can come back
+  // useless — the AI says NOT_FOUND, or it writes a polite "I can't see the file" that
+  // the SERVER refuses with a 422 (a refusal accepted as an answer once got cached and
+  // served to a whole class). Both mean the same thing: retry once from the extracted
+  // text, in a fresh chat, with any figure we anchored.
+  if (item.document) {
+    const markdown = await ask(item, cfg, sites, {
+      prompt: item.prompt, doc: item.document, figures: [],
+    })
+    if (!markdown.trim().startsWith('NOT_FOUND')) {
+      try {
+        await submitAnswer(item, markdown)
+        return { key: item.site, ...sites[item.site] }
+      } catch (e) {
+        if (e.status !== 422) throw e   // 422 = the server judged it a non-answer
+      }
+    }
+  }
+
+  const markdown = await ask(item, cfg, sites, {
+    prompt: item.fallback_prompt || item.prompt,
+    figures: item.figures || [],
+  })
+  await submitAnswer(item, markdown)
   return { key: item.site, ...sites[item.site] }
 }
 

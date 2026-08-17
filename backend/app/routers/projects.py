@@ -14,7 +14,7 @@ from ..db import SessionLocal, get_db
 from ..models import Answer, AnswerAsset, Figure, Project, Question, User
 from ..security import audit, client_ip, current_user
 from ..services import (billing, cache, diagrams, explainer, export, extractor, ingest,
-                        paper, solver, verify)
+                        paper, refusal, solver, verify)
 from ..services.queue import wake
 
 log = logging.getLogger("prism.projects")
@@ -329,6 +329,20 @@ def submit_assist(question_id: str, body: AssistSubmit,
     q = _own_question(db, user, question_id)
     if q.status not in ("assist_waiting", "assist_running"):
         raise HTTPException(409, "This question is not waiting for an assist answer")
+
+    # An AI that couldn't see the paper still replies politely, in fluent markdown, and
+    # once accepted here it becomes an "answer" — and worse, a CACHED answer served to
+    # the whole class. ("No file appears to be attached" was cached and served 15 times.)
+    # Reject it: the question stays waiting, the extension counts it as a failure and
+    # retries elsewhere, and a student pasting by hand sees why it bounced.
+    hit = refusal.looks_like_a_refusal(body.content_md)
+    if hit or len(body.content_md.strip()) < refusal.MIN_ANSWER_CHARS:
+        q.status = "assist_waiting"     # release the lease so it goes back in the pool
+        q.leased_at = None
+        db.commit()
+        why = f'it says the AI couldn\'t answer ("{hit}")' if hit else "it is too short to be one"
+        raise HTTPException(422, f"That reply was not saved as an answer — {why}. "
+                                 "Try again, or a different AI.")
 
     verified, note = (None, "")
     if q.qtype == "numerical":

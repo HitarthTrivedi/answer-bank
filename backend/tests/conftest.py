@@ -11,6 +11,9 @@ os.environ["MOCK_PAYMENTS"] = "true"
 os.environ["PROVIDER_MIN_INTERVAL_S"] = "0"
 os.environ["DATABASE_URL"] = "sqlite:///./test_prism.db"
 os.environ["FREE_BANKS"] = "1"
+# pinned, because the developer's backend/.env may disable it while testing by hand —
+# the cache tests must not silently become no-ops when it does
+os.environ["CLASS_CACHE"] = "true"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
