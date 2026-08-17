@@ -243,6 +243,23 @@ export default function Project() {
         </p>
       )}
 
+      {/* A run that died must say so, loudly. This exact message was being sent by the
+          extension and silently dropped here — so a crashed run looked like nothing
+          happened at all, which is the most confusing possible failure. */}
+      {!run?.running && run?.status === 'error' && (
+        <div className="mt-10">
+          <Notice tone="loud">
+            The run stopped: {run.message || 'unknown error'}{' — '}
+            <button
+              onClick={() => startRun(id).then(() => setRun({ running: true, status: 'running' })).catch((e) => setError(e.message))}
+              className="underline underline-offset-2"
+            >
+              try again
+            </button>
+          </Notice>
+        </div>
+      )}
+
       {paywall && (
         <Paywall info={paywall} onClose={() => setPaywall(null)}
                  onPaid={() => { setPaywall(null); exportDocx() }} />
