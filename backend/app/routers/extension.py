@@ -165,23 +165,54 @@ def _assign(questions: list[Question], sites: list[str], size: int) -> list[tupl
     it best — so nothing here overrides it for the sake of an even spread. Three questions
     that all belong on Gemini all go to Gemini, in three separate tabs.
 
-    The only substitution is when the routed site isn't usable: the student isn't signed
-    into it, or the config no longer lists it. Then the question falls back to the type's
-    default and finally to whatever is available, because an answer from the second-best
-    assistant beats no answer at all.
+    Two things do override it, and both are about what the student can actually reach:
+
+      * an assistant they aren't signed into, and
+      * an assistant that can't take the file. Document mode uploads the question paper
+        once PER QUESTION, and a free ChatGPT account allows three uploads a day — spent
+        before the first batch of three finishes. So a question that needs the paper is
+        moved to a site with upload headroom (`document_sites`, best first), even though
+        the router liked someone else for the content.
+
+    A second-best answer beats no answer, and it beats an account locked out for six hours.
     """
-    fallback = get_extension_config().get("routing", {})
+    cfg = get_extension_config()
+    fallback = cfg.get("routing", {})
+    doc_order = cfg.get("document_sites", [])
+    roomy = {k for k, v in cfg.get("sites", {}).items()
+             if v.get("documents") in ("unlimited", "generous")}
+    roomy_order = [s for s in doc_order if s in roomy]
     chosen: list[tuple[Question, str]] = []
 
     for q in questions:
         if len(chosen) >= size:
             break
-        for site in (q.target_site, fallback.get(q.qtype or "theory"), sites[0]):
+        preference = _preference(q, fallback, doc_order, roomy, roomy_order)
+        for site in [*preference, sites[0]]:
             if site in sites:
                 chosen.append((q, site))
                 break
 
     return chosen
+
+
+def _preference(q: Question, fallback: dict, doc_order: list[str],
+                roomy: set[str], roomy_order: list[str]) -> list[str]:
+    """Where this question would like to go, best first."""
+    if not paper.answered_from_document(q):
+        return [q.target_site, fallback.get(q.qtype or "theory")]
+
+    # The paper goes up with it, so upload headroom is the binding constraint. Keep the
+    # router's pick when the question is *about* a figure and that site has room — judging
+    # a diagram is exactly what its choice was about. Otherwise rotate across the sites
+    # with headroom: a 28-question paper handed entirely to one assistant answers three
+    # times slower than one shared between two, and puts the whole bank on one account.
+    if paper.is_visual(q) and q.target_site in roomy:
+        return [q.target_site, *doc_order]
+    if roomy_order:
+        start = q.idx % len(roomy_order)
+        return [*roomy_order[start:], *roomy_order[:start], *doc_order]
+    return list(doc_order)
 
 
 def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: int) -> dict:

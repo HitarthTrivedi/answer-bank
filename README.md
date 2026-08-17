@@ -14,8 +14,8 @@
 **Question bank in → exam-ready answer document out.**
 
 A prism takes one beam and splits it into a spectrum. This one takes a question bank and
-fans it across ChatGPT, Claude and Gemini — each question going to whichever handles it
-best, three answering at a time.
+fans it across ChatGPT, Claude, Gemini and Kimi — each question going to whichever
+handles it best, three answering at a time.
 
 Students upload a question bank from any source (PDF, DOCX, image, pasted text).
 Prism answers it **one question at a time** — because dumping 40 questions into a
@@ -55,9 +55,15 @@ upload → split into questions → student reviews/edits → queue:
   all, routing falls back to keywords and everything still works.
 - **Three at a time, wherever they belong.** A batch is the next three questions, each
   going to the assistant the router picked for it — all three to Gemini if all three are
-  diagrams, in three separate tabs. Nothing reassigns a question to even out the load;
-  spread falls out of the routing itself, since different question types go to different
-  sites. Every question still gets its own brand-new chat.
+  diagrams, in three separate tabs. Every question still gets its own brand-new chat.
+- **Routing is set from what each assistant is actually good at, and how much of it you
+  get free.** ChatGPT for numerical working and step-by-step math; Claude for long
+  structured answers and code; Gemini for anything visual; Kimi for the bulk and for
+  anything that needs the whole paper attached. Capacity is the half that decides a run:
+  free ChatGPT allows **three file uploads a day** and this uploads the paper once per
+  question, while Kimi's free tier caps neither messages nor uploads. So questions needing
+  the paper rotate across the sites with headroom and never touch ChatGPT's budget.
+  Checked August 2026; the evidence is recorded in `backend/extension_selectors.json`.
 - **One prompt contract.** The extension and a student pasting by hand use the *same*
   crafted prompt, so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
@@ -142,7 +148,7 @@ to paste into any AI tab by hand.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-46 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+47 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
 the full pipeline with a stand-in for the browser (`tests/helpers.py`), proof that no
 question is ever answered server-side, the export paywall (free bank → 402 → paid unlock

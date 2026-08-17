@@ -30,7 +30,7 @@ export default function ExtensionNeeded({ onManual }) {
     <div>
       <Eyebrow>One-time setup · about 30 seconds</Eyebrow>
       <p className="mt-4 max-w-lg text-[15px] leading-relaxed text-neutral-600">
-        The extension answers each question in the ChatGPT, Claude or Gemini tab you're
+        The extension answers each question in the ChatGPT, Claude, Gemini or Kimi tab you're
         already signed into. There's nothing to connect afterwards — it picks up your
         session from this page.
       </p>

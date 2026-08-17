@@ -12,7 +12,7 @@ import ExtensionNeeded from './ExtensionNeeded'
 import Markdown from './Markdown'
 import { Button, Eyebrow, Notice, Pulse, Quiet, Text, fieldClass } from './ui'
 
-const SITE_NAMES = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }
+const SITE_NAMES = { chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', kimi: 'Kimi' }
 
 export default function QuestionScreen({ q, index, total, project, mode, run, onChanged,
                                          onPatch, onRemove, onAdd }) {

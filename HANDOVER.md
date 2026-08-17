@@ -250,8 +250,48 @@ there are, never for what they say. Supporting changes:
 `services/paper.py` is new and owns the two predicates that were duplicated across routers:
 `is_visual` (how the deck groups) and `answered_from_document` (how the extension answers).
 
-### Test coverage — 61 total
-`backend` (46): auth + refresh rotation, upload magic bytes, extraction, SymPy
+### Added in the assistant-analysis pass
+
+Routing used to run on invented `strengths` strings. They are now set from research done
+in **August 2026** — and the half that turned out to matter most wasn't capability at all,
+it was **free-tier capacity**.
+
+| Site | Best at | Free tier | Documents |
+|---|---|---|---|
+| **ChatGPT** | numerical working, step-by-step math (leads AIME-style math reasoning), clean LaTeX; fastest and clearest explainer | unlimited text chat | **3 uploads/day** — almost none |
+| **Claude** | long structured answers, derivations, proofs, comparisons; strongest coder (leads SWE-Bench Verified) | **smallest of the four** — compute pool on 5-hour windows, ~15 messages in practice | 5 per chat |
+| **Gemini** | anything visual or spatial: reading a graph/circuit/table out of a document, producing plots and diagrams | compute-pooled, 5-hour resets | 10 per prompt, 100 MB |
+| **Kimi** | slowest, but the most patient with a long attached paper — reads a whole question bank without truncating; good tables and plotted figures | **no message cap** | **no upload cap** |
+
+**Why this changes the design.** Document mode uploads the question paper *once per
+question*. ChatGPT allows three uploads a day on the free tier — spent before the first
+batch of three finishes. Everything looks correctly routed right up to the point the
+uploads stop being accepted, which is the worst kind of failure. So:
+
+- **Kimi is now a fourth site** (`extension_selectors.json`, `manifest.json`). It is the
+  only free tier that can absorb a figure-heavy bank, and it carries the bulk of theory.
+  Its selectors are **unverified**, like the other three (P0-1) — deliberately generic so
+  a class rename doesn't break them.
+- **`document_sites`** is an ordered preference for questions that need the paper attached:
+  `kimi, gemini, claude, chatgpt`. ChatGPT is last on purpose.
+- **`_assign` rotates document questions across the sites with headroom** rather than
+  piling them on the first. Measured on the real 28-question bank: kimi 8 / gemini 7 over
+  five batches, none on ChatGPT. Piling them all on one site answers ~2× slower and puts
+  the whole bank on one account.
+- **A question that is *about* a figure keeps the router's choice** when that site has
+  headroom — judging a diagram is exactly what the choice was about.
+- **The router prompt now sees `free_tier` as well as `strengths`**, and is told to spend a
+  scarce assistant on the questions where its advantage earns marks (long, high-mark,
+  structured) rather than on bulk. Default map: numerical→chatgpt, code→claude,
+  graph/diagram→gemini, **theory→kimi** (theory is the bulk type; sending it to Claude
+  stops the bank a third of the way through).
+
+**Re-check the free tiers before launch — they move every few months.** The evidence is
+recorded in `extension_selectors.json` under `_routing_evidence` so it is obvious what the
+routing is based on and when it was last checked.
+
+### Test coverage — 62 total
+`backend` (47): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
 question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →

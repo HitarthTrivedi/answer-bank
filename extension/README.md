@@ -2,7 +2,7 @@
 
 **This extension is the engine.** The Prism server only *routes* — a small model
 decides which assistant suits each question — and every answer comes from the AI tabs the
-student is already signed into (ChatGPT, Claude, Gemini). The extension is a robot doing
+student is already signed into (ChatGPT, Claude, Gemini, Kimi). The extension is a robot doing
 exactly what a human would: take one prompt, paste it into a fresh chat, copy the answer
 back.
 
@@ -41,7 +41,7 @@ questions, press **Answer with my AI**. The popup is a read-only status panel.
 app page          bridge.js         service worker              student's browser
 ────────          ─────────         ──────────────              ─────────────────
 "Answer with  ──► relays with  ──►  GET /extension/batch
- my AI"           the session       3 questions, 3 DISTINCT sites
+ my AI"           the session       next 3 questions, routed
                                         ├─ fresh tab ──────────► chatgpt.com
                                         ├─ fresh tab ──────────► claude.ai
                                         └─ fresh tab ──────────► gemini.google.com
@@ -62,7 +62,7 @@ into one thread — each still gets its own empty chat.
 
 **Figures ride along.** If a question has an image attached, the driver pastes it into
 the composer before the prompt, using the same synthetic-paste mechanism. That is where
-the product gets image understanding for free: ChatGPT, Claude and Gemini all read a
+the product gets image understanding for free: ChatGPT, Claude, Gemini and Kimi all read a
 pasted figure, on the student's own subscription. The server never looks at the pixels.
 
 **Leases stop double work.** The server marks a handed-out question `assist_running`; if
@@ -80,7 +80,7 @@ another. Nothing to configure, nothing to get wrong.
 
 ## The part that will break
 
-`backend/extension_selectors.json` holds every CSS selector for all three sites. When
+`backend/extension_selectors.json` holds every CSS selector for all four sites. When
 ChatGPT renames a button, **edit that file on the server** — every installed extension
 picks it up on its next run. Nobody reinstalls anything.
 
@@ -121,7 +121,7 @@ language tags, tables, nested lists, and the `FINAL:` line the numerical verifie
 
 ## Before you ship this
 
-- **Automating ChatGPT / Claude / Gemini web violates all three of their ToS.** Tell
+- **Automating ChatGPT / Claude / Gemini / Kimi web violates all of their ToS.** Tell
   students plainly. Gemini is the one to flag hardest — that's their Google account,
   not a throwaway.
 - Free web tiers have message caps. A 40-question bank can hit them mid-run; failed

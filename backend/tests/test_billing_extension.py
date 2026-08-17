@@ -114,7 +114,8 @@ def test_every_uncached_question_is_parked_for_the_students_own_ai(client, auth)
     assert work["done"] is False
     assert work["prompt"], "the extension must receive a ready-made prompt"
     assert "<question>" in work["prompt"]
-    assert work["preferred_site"] in ("chatgpt", "claude", "gemini")
+    from app.config import get_extension_config
+    assert work["preferred_site"] in get_extension_config()["sites"]
 
     # answering through the normal assist route clears it
     r = client.post(f"/api/questions/{work['question_id']}/assist",
@@ -160,10 +161,13 @@ def test_a_batch_follows_the_router_even_when_that_means_one_assistant(client, a
     """
     pid = _started_project(client, auth, "Batch Bank", text=BIG_BANK)
 
+    from app.config import get_extension_config
+    theory_site = get_extension_config()["routing"]["theory"]
+
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
     assert len(batch) == 3
     # every question in BIG_BANK is theory, so every one belongs on the same assistant
-    assert {b["site"] for b in batch} == {"claude"}
+    assert {b["site"] for b in batch} == {theory_site}
     assert all(b["site"] == b["route_site"] for b in batch), "no slot may override the router"
     assert all(b["prompt"] and "<question>" in b["prompt"] for b in batch)
 
@@ -179,11 +183,15 @@ def test_a_batch_only_uses_assistants_the_student_is_signed_into(client, auth):
     """The one thing that may override the router: an assistant the student can't reach.
     A second-best answer beats no answer."""
     pid = _started_project(client, auth, "Excluded Bank", text=BIG_BANK)
-    res = client.get(f"/api/extension/batch?project_id={pid}&exclude=claude,gemini",
+    from app.config import get_extension_config
+    everyone = list(get_extension_config()["sites"])
+    others = ",".join(s for s in everyone if s != "chatgpt")
+
+    res = client.get(f"/api/extension/batch?project_id={pid}&exclude={others}",
                      headers=auth).json()
     assert [b["site"] for b in res["batch"]] == ["chatgpt", "chatgpt", "chatgpt"]
 
-    res = client.get(f"/api/extension/batch?project_id={pid}&exclude=chatgpt,claude,gemini",
+    res = client.get(f"/api/extension/batch?project_id={pid}&exclude={','.join(everyone)}",
                      headers=auth).json()
     assert res["batch"] == [] and res["error"] == "no_sites_available"
 
@@ -377,6 +385,38 @@ def test_a_whole_bank_is_routed_in_one_call(client, auth):
     assert all(r["qtype"] in router_agent.QTYPES for r in routes)
     assert all(r["site"] for r in routes)
     assert len(calls) == 1, f"12 questions must cost one call, not {len(calls)}"
+
+
+def test_a_question_needing_the_paper_goes_where_uploads_are_free(client, auth):
+    """Document mode uploads the question paper once PER QUESTION, and a free ChatGPT
+    account allows three uploads a day — spent before the first batch of three finishes.
+    So a question that needs the paper is moved to a site with upload headroom, even when
+    the router preferred someone else for the content.
+
+    This is the constraint that silently kills a 28-question run: everything looks routed
+    correctly right up to the point the uploads stop being accepted."""
+    from app.config import get_extension_config
+
+    cfg = get_extension_config()
+    roomy = {k for k, v in cfg["sites"].items() if v.get("documents") in ("unlimited", "generous")}
+    assert roomy, "at least one site must be able to take a document at volume"
+    assert cfg["document_sites"][0] in roomy, "the first choice must have headroom"
+    assert cfg["document_sites"][-1] not in roomy, "the tightest site belongs last"
+
+    r = client.post("/api/projects", headers=auth,
+                    data={"title": "Upload Budget Bank"},
+                    files={"file": ("bank.docx", _docx_with_figure(),
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    pid = r.json()["id"]
+    wait_for(client, auth, pid, lambda p: p["status"] == "review")
+    client.post(f"/api/projects/{pid}/start", headers=auth)
+    wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
+
+    batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    doc_items = [b for b in batch if b.get("document")]
+    assert doc_items, "a bank we still hold the file for is answered from that file"
+    for b in doc_items:
+        assert b["site"] in roomy, f"Q{b['idx']} would burn a scarce upload on {b['site']}"
 
 
 def test_figure_questions_are_grouped_apart_from_theory(client, auth):
