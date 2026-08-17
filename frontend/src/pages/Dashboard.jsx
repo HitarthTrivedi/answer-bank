@@ -1,18 +1,14 @@
+// Every question bank you've uploaded. A list, not a wall of cards — you come here to
+// pick one and leave, so the only thing that needs to be obvious is which is which.
+
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import Paywall from '../components/Paywall'
-import { isInstalled } from '../extension'
 import Wordmark from '../components/Wordmark'
-
-const STATUS_STYLE = {
-  extracting: 'bg-amber-500/15 text-amber-400',
-  review: 'bg-sky-500/15 text-sky-400',
-  processing: 'bg-indigo-500/15 text-indigo-400',
-  done: 'bg-emerald-500/15 text-emerald-400',
-  error: 'bg-red-500/15 text-red-400',
-}
+import { Button, Eyebrow, Notice, Quiet, Text, fieldClass } from '../components/ui'
+import { isInstalled } from '../extension'
 
 export default function Dashboard() {
   const { user, logout, refreshMe } = useAuth()
@@ -25,95 +21,104 @@ export default function Dashboard() {
   const loadBalance = () => api.get('/billing/me').then(setBalance).catch(() => {})
   useEffect(() => { load(); loadBalance(); refreshMe() }, [])
 
+  const del = async (e, p) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!confirm(`Delete “${p.title}” and its answers?`)) return
+    await api.del(`/projects/${p.id}`)
+    load()
+  }
+
   return (
     <div className="min-h-screen">
-      <nav className="border-b border-slate-800">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link to="/"><Wordmark /></Link>
-          <div className="flex items-center gap-4 text-sm">
+      <header className="border-b border-neutral-200">
+        <div className="mx-auto flex h-14 w-full max-w-3xl items-center justify-between px-6">
+          <Link to="/"><Wordmark size="sm" /></Link>
+          <div className="flex items-center gap-5 text-[13px] text-neutral-500">
+            <span title={isInstalled() ? 'Your AI answers the questions' : 'Install it to answer automatically'}
+                  className="hidden items-center gap-1.5 sm:flex">
+              <span className={`h-1.5 w-1.5 rounded-full ${isInstalled() ? 'bg-neutral-900' : 'bg-neutral-300'}`} />
+              {isInstalled() ? 'Extension ready' : 'Extension off'}
+            </span>
             {balance && (
-              <button
-                onClick={() => setShowBuy(balance)}
-                className="rounded-full bg-indigo-500/15 px-3 py-1 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/25"
-              >
+              <button onClick={() => setShowBuy(balance)} className="hover:text-neutral-900">
                 {balance.free_banks_left > 0
-                  ? `${balance.free_banks_left} free bank${balance.free_banks_left === 1 ? '' : 's'}`
+                  ? `${balance.free_banks_left} free`
                   : `${balance.credits} credit${balance.credits === 1 ? '' : 's'}`}
               </button>
             )}
-            <span
-              className={isInstalled() ? 'text-xs text-emerald-400' : 'text-xs text-amber-400'}
-              title={isInstalled() ? 'The extension will answer your questions' : 'Install it from chrome://extensions'}
-            >
-              {isInstalled() ? '● Extension ready' : '● Extension not installed'}
-            </span>
-            <span className="text-slate-300">{user?.name}</span>
-            <button onClick={logout} className="text-slate-500 hover:text-slate-300">Sign out</button>
+            <button onClick={logout} className="hover:text-neutral-900" title={user?.email}>Sign out</button>
           </div>
         </div>
-      </nav>
+      </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Your question banks</h1>
-          <button
-            onClick={() => setShowNew(true)}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500"
-          >
-            + New question bank
-          </button>
+      <main className="mx-auto w-full max-w-3xl px-6 py-14 sm:py-20">
+        <div className="mb-10 flex items-end justify-between gap-6">
+          <h1 className="text-[26px] font-medium tracking-[-0.01em]">Question banks</h1>
+          <Button onClick={() => setShowNew(true)}>New bank</Button>
         </div>
 
         {projects === null ? (
-          <p className="text-slate-500">Loading…</p>
+          <p className="text-sm text-neutral-400">Loading…</p>
         ) : projects.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-700 p-12 text-center text-slate-400">
-            <p className="mb-2 text-lg">No question banks yet</p>
-            <p className="text-sm">Upload one — PDF, DOCX, image or pasted text — and get a full answer document.</p>
+          <div className="border-t border-neutral-200 py-20 text-center">
+            <p className="text-[15px] text-neutral-600">Nothing here yet.</p>
+            <p className="mx-auto mt-2 max-w-sm text-sm text-neutral-400">
+              Upload a question paper — PDF, Word, a photo, or pasted text. Graphs and
+              diagrams inside it are fine.
+            </p>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="border-t border-neutral-200">
             {projects.map((p) => (
-              <Link
-                key={p.id}
-                to={`/app/p/${p.id}`}
-                className="rounded-xl border border-slate-800 bg-slate-900/50 p-5 transition hover:border-indigo-600/60"
-              >
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <h3 className="font-medium leading-snug">{p.title}</h3>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${STATUS_STYLE[p.status] || ''}`}>
-                    {p.status}
+              <li key={p.id} className="group flex items-center gap-6 border-b border-neutral-200">
+                <Link to={`/app/p/${p.id}`} className="flex min-w-0 flex-1 items-center gap-6 py-5 transition hover:opacity-60">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] font-medium text-neutral-900">{p.title}</span>
+                    <span className="mt-1 block truncate text-[13px] text-neutral-400">
+                      {p.source_filename} · {summarise(p)}
+                    </span>
                   </span>
-                </div>
-                <p className="text-xs text-slate-500">{p.source_filename}</p>
-                <p className="mt-3 text-sm text-slate-400">
-                  {p.total} questions
-                  {p.counts.answered ? ` · ${p.counts.answered} answered` : ''}
-                  {p.counts.assist_waiting ? ` · ${p.counts.assist_waiting} need you` : ''}
-                </p>
-              </Link>
+                  <span className="shrink-0 text-neutral-300">→</span>
+                </Link>
+                <button
+                  onClick={(e) => del(e, p)}
+                  aria-label={`Delete ${p.title}`}
+                  className="hidden shrink-0 text-[13px] text-neutral-300 hover:text-neutral-900 group-hover:block"
+                >
+                  Delete
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </main>
 
-      {showNew && <NewProject onClose={() => setShowNew(false)} />}
+      {showNew && <NewBank onClose={() => setShowNew(false)} />}
       {showBuy && (
-        <Paywall
-          info={showBuy}
-          onClose={() => setShowBuy(null)}
-          onPaid={() => { setShowBuy(null); loadBalance() }}
-        />
+        <Paywall info={showBuy} onClose={() => setShowBuy(null)}
+                 onPaid={() => { setShowBuy(null); loadBalance() }} />
       )}
     </div>
   )
 }
 
-function NewProject({ onClose }) {
-  const [tab, setTab] = useState('file')
+function summarise(p) {
+  if (p.status === 'extracting') return 'reading it now'
+  if (p.status === 'error') return 'could not be read'
+  if (p.status === 'review') return `${p.total} questions · needs a quick look`
+  const done = p.counts.answered || 0
+  if (done >= p.total && p.total) return `${p.total} questions · all answered`
+  return `${done} of ${p.total} answered`
+}
+
+// ------------------------------------------------------------------------ upload
+
+function NewBank({ onClose }) {
   const [title, setTitle] = useState('')
   const [file, setFile] = useState(null)
   const [text, setText] = useState('')
+  const [pasting, setPasting] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const nav = useNavigate()
@@ -124,13 +129,10 @@ function NewProject({ onClose }) {
     setError('')
     try {
       const fd = new FormData()
-      fd.append('title', title)
-      if (tab === 'file') {
-        if (!file) throw new Error('Choose a file first')
-        fd.append('file', file)
-      } else {
-        fd.append('text', text)
-      }
+      fd.append('title', title.trim() || (file ? file.name.replace(/\.[^.]+$/, '') : 'Question bank'))
+      if (pasting) fd.append('text', text)
+      else if (file) fd.append('file', file)
+      else throw new Error('Choose a file first')
       const project = await api.postForm('/projects', fd)
       nav(`/app/p/${project.id}`)
     } catch (err) {
@@ -140,51 +142,45 @@ function NewProject({ onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6"
-      >
-        <h2 className="mb-4 text-lg font-semibold">New question bank</h2>
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-white/80 p-4 backdrop-blur-sm"
+         onClick={onClose}>
+      <form onSubmit={submit} onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white p-7 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.25)]">
+        <Eyebrow>New question bank</Eyebrow>
+
         <input
-          className="mb-3 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm outline-none focus:border-indigo-500"
-          placeholder="Title, e.g. 'DBMS Unit 3'"
-          value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={200}
+          className={`${fieldClass} mt-4`} maxLength={200}
+          placeholder="Name it — e.g. DBMS Unit 3"
+          value={title} onChange={(e) => setTitle(e.target.value)}
         />
-        <div className="mb-3 grid grid-cols-2 rounded-lg bg-slate-800 p-1 text-sm">
-          {['file', 'paste'].map((t) => (
-            <button
-              type="button" key={t} onClick={() => setTab(t)}
-              className={`rounded-md py-1.5 ${tab === t ? 'bg-indigo-600 font-medium' : 'text-slate-400'}`}
-            >
-              {t === 'file' ? 'Upload file' : 'Paste text'}
-            </button>
-          ))}
-        </div>
-        {tab === 'file' ? (
-          <label className="mb-3 block cursor-pointer rounded-lg border border-dashed border-slate-600 p-6 text-center text-sm text-slate-400 hover:border-indigo-500">
-            {file ? file.name : 'PDF · DOCX · TXT · PNG/JPG — click to choose'}
-            <input
-              type="file" className="hidden" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-            />
-          </label>
-        ) : (
+
+        {pasting ? (
           <textarea
-            className="mb-3 h-40 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm outline-none focus:border-indigo-500"
-            placeholder={'Paste questions, e.g.\n1. Define X (5 marks)\n2. Calculate Y…'}
+            className={`${fieldClass} mt-3 h-44 resize-none`}
+            placeholder={'1. Define normalization. (5 marks)\n2. Compare TCP and UDP. (10 marks)'}
             value={text} onChange={(e) => setText(e.target.value)}
           />
+        ) : (
+          <label className="mt-3 block cursor-pointer rounded-lg border border-dashed border-neutral-300 px-4 py-10 text-center transition hover:border-neutral-900">
+            <span className="block text-sm text-neutral-900">{file ? file.name : 'Choose your question paper'}</span>
+            <span className="mt-1 block text-[12px] text-neutral-400">
+              PDF, Word, or a photo — graphs and diagrams inside are fine
+            </span>
+            <input type="file" className="hidden" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"
+                   onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
         )}
-        {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
-        <div className="flex justify-end gap-3">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">
-            Cancel
-          </button>
-          <button disabled={busy} className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">
-            {busy ? 'Uploading…' : 'Extract questions'}
-          </button>
+
+        {error && <div className="mt-4"><Notice tone="loud">{error}</Notice></div>}
+
+        <div className="mt-6 flex items-center justify-between">
+          <Text type="button" onClick={() => { setPasting(!pasting); setError('') }}>
+            {pasting ? 'Upload a file instead' : 'Paste text instead'}
+          </Text>
+          <div className="flex items-center gap-3">
+            <Quiet type="button" size="sm" onClick={onClose}>Cancel</Quiet>
+            <Button size="sm" disabled={busy}>{busy ? 'Reading…' : 'Continue'}</Button>
+          </div>
         </div>
       </form>
     </div>

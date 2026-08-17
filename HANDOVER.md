@@ -157,17 +157,70 @@ the whole run from its own page. Installing the extension is the entire setup.
   `lru_cache`d settings object meant whichever test module imported first owned the app.
   Tests now pass in any order.
 
-### Test coverage — 31 total
-`backend` (21): auth + refresh rotation, upload magic bytes, extraction, SymPy
+### Added in the product pass (the shipping build)
+
+**The interface was rebuilt.** It is monochrome — white, black, grey, no accent colour —
+and it shows **one question per screen** instead of stacking all 28 down a scrolling page.
+The arrow keys move between them, a rail across the top shows where you are and what's
+answered, and the question number lives in the URL (`/app/p/:id/7`) so back, forward,
+reload and shared links all land in the right place. `components/ui.jsx` holds the entire
+visual vocabulary — a solid button, a quiet one, a text action, a field. Build from those
+rather than reaching for new greys.
+
+The review step uses the same deck: each question is editable on its own screen, with
+marks, remove, and add-one-after-this. `AnswerCard.jsx` and `ReviewQuestions.jsx` are gone.
+
+**Four bugs that were silently destroying image questions**, all fixed:
+
+1. **The review save was deleting and recreating every question row.** That set every
+   figure's `question_id` to NULL and dropped `source_number`. Since every bank passes
+   through review, document mode could never fire in production and figure questions were
+   answered with no figure. Rows are now matched by `id` and edited in place
+   (`routers/projects.py::update_questions`). Regression test:
+   `test_the_review_save_keeps_figures_and_the_number_in_the_paper`.
+2. **`_dedupe` collapsed every picture row into one.** Two image-only questions have
+   identical placeholder text, so a 5-figure bank kept one of them. Placeholder rows are
+   now exempt from deduplication.
+3. **The AI selection step dropped picture rows**, because it judges a candidate by its
+   opening text and a picture has none. `_restore_numbered_gaps` puts back any candidate
+   whose number is missing from inside the kept run — a bank numbered 1…27 obviously has
+   a 10. Numbered steps inside an answer either reuse a number already present or sit
+   outside the run, so they don't come back through this.
+4. **Run-on rows swallowed whole questions.** A spreadsheet export produced
+   `…characteristics 7 8Write A* algorithm` — three questions on one line, two of them
+   lost with no error. `_recover_run_on_rows` splits them, but *only* where the numbering
+   proves something is missing (a jump from 6 to 9). A contiguous run is never touched.
+
+Measured on the real spreadsheet-export bank: **22 questions with figures lost → 28
+questions with all five picture rows recovered and their figures attached.**
+
+**Document mode is now the default path, not the exception.** Any bank we still hold the
+file for is answered against that file: the paper is a better copy of the question than
+our extraction is, and the model reading it decides which figure belongs to which question
+far better than any heuristic. Extraction is now only responsible for *how many* questions
+there are, never for what they say. Supporting changes:
+- `build_document_prompt(..., number=None)` locates a question by **quoting its opening**
+  when the paper has no usable numbering (a photo, a bulleted sheet).
+- A number that appears twice in a paper is not trusted to identify a question
+  (`_number_is_unique`) — spreadsheet exports restart their numbering, and "answer
+  question 11" against two question 11s is a coin toss. Those quote instead.
+- The batch carries a `fallback_prompt`. If the AI replies `NOT_FOUND`, the extension
+  retries once in a fresh chat from the extracted text plus any anchored figure, so a
+  miss costs one extra chat rather than the question.
+
+### Test coverage — 59 total
+`backend` (44): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
 question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →
 free re-download), **webhook signature rejection**, **replay-safety** (a repeated callback
 doesn't mint a second credit), **cross-account isolation**.
 
-`extension` (10): the HTML→markdown converter — KaTeX → original LaTeX, code fences with
+`extension` (15): the HTML→markdown converter — KaTeX → original LaTeX, code fences with
 language tags, tables, nested lists, the `FINAL:` line the verifier reads, and that the
-live DOM is never mutated.
+live DOM is never mutated — plus five manifest checks, including the one for unrecognised
+keys inside `content_scripts`, which is what silently blocked installation for a whole
+afternoon.
 
 ---
 

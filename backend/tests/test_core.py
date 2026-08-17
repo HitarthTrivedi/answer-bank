@@ -274,6 +274,51 @@ def test_an_image_only_row_becomes_a_visible_question_not_a_silent_loss():
     assert len(image_qs) == 2, "rows 4 and 6 are empty and must survive as flagged questions"
 
 
+RUN_ON_ROWS = """AI Question Bank
+1Define AI. What are the task domains of AI?
+2Give classification of Artificial Intelligence.
+3Discuss the requirement of good control strategy in AI.
+4Explain problem characteristics 5 6Write A* algorithm
+7Explain problem reduction using AND-OR graph. 8 9
+"""
+
+
+def test_rows_a_spreadsheet_ran_together_are_recovered():
+    """The worst extraction failure isn't a bad split — it's a silent one. A spreadsheet
+    export can run three rows into one line ('…characteristics 5 6Write A* algorithm'),
+    and the two questions in the middle simply vanish: no error, no warning, and a student
+    who only finds out at the exam.
+
+    The numbering is the proof. A jump from 4 to 7 means 5 and 6 exist and can only be
+    inside row 4's text, so that is the one place we go looking."""
+    qs = extractor.heuristic_extract(RUN_ON_ROWS)
+    by_number = {q["number"]: q["text"] for q in qs}
+
+    assert sorted(by_number) == [1, 2, 3, 4, 5, 6, 7, 8, 9], "no question may go missing"
+    assert by_number[4] == "Explain problem characteristics"
+    assert by_number[5] == extractor.FIGURE_ONLY, "a row with only a number is a picture"
+    assert by_number[6] == "Write A* algorithm"
+    assert by_number[7] == "Explain problem reduction using AND-OR graph."
+    assert by_number[8] == by_number[9] == extractor.FIGURE_ONLY, "trailing rows too"
+
+
+def test_recovery_leaves_a_cleanly_numbered_bank_alone():
+    """It only fires where the numbering proves something is missing. A contiguous run is
+    never second-guessed — otherwise 'compare the 2 approaches' inside question 1 would
+    tear a perfectly good bank in half."""
+    contiguous = [
+        extractor._finish("Define AI.", 0, 1),
+        extractor._finish("There are 2 approaches to compare here.", 50, 2),
+        extractor._finish("Compare TCP and UDP.", 100, 3),
+    ]
+    assert extractor._recover_run_on_rows(contiguous) == contiguous
+
+    # a real gap with nothing hiding in the text is also left as it is
+    gapped = [extractor._finish("Define normalization.", 0, 4),
+              extractor._finish("Compare TCP and UDP.", 60, 9)]
+    assert extractor._recover_run_on_rows(gapped) == gapped
+
+
 def test_the_glued_shape_never_hijacks_a_normal_bank():
     """'1Define' is a guess that would misfire on ordinary prose, so it must only apply
     when no punctuated numbering exists anywhere in the document."""

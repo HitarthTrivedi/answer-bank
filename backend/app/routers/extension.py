@@ -125,20 +125,49 @@ def projects_needing_work(user: User = Depends(current_user), db: Session = Depe
     return out
 
 
-def _wants_the_document(q: Question) -> bool:
-    """Is this a question whose meaning is in the paper rather than in its text?
+# Formats where the file itself can hold something our text extraction cannot: figures,
+# graphs, circuits, scanned pages, spreadsheet layouts. A .txt has none of that, so
+# attaching it would buy an upload's worth of latency and nothing else.
+_VISUAL_SOURCES = {".pdf", ".docx", ".png", ".jpg", ".jpeg"}
 
-    Image-only rows, questions naming a figure, and questions we managed to attach one
-    to. For these we hand the AI the whole document and ask for one numbered question,
-    instead of trying to work out which picture belongs where.
-    """
-    if not (q.project.source_path and Path(q.project.source_path).exists()):
-        return False
+# Below this, a question's extracted text is too thin to quote as a locator — usually a
+# stub or a placeholder for a row that was pure image.
+_QUOTABLE_CHARS = 25
+
+
+def _number_is_unique(q: Question) -> bool:
+    """Does this question's number point at exactly one question in the paper?"""
     if q.source_number is None:
         return False
-    return (q.text.startswith(extractor.FIGURE_ONLY[:24])
-            or bool(q.figures)
-            or extractor.mentions_a_figure(q.text))
+    return sum(1 for other in q.project.questions
+               if other.source_number == q.source_number) == 1
+
+
+def _wants_the_document(q: Question) -> bool:
+    """Should this question be answered against the uploaded paper itself?
+
+    Yes, for every question in a paper we still have — not only the ones that name a
+    figure. The document is simply a better copy of the question than our extraction is:
+    it carries the figures, the tables, the sub-parts and the original wording, and the
+    model reading it decides which picture belongs to which question far better than any
+    anchoring heuristic could. Extraction is then only responsible for *how many*
+    questions there are and what each is called, never for their content.
+
+    The exceptions are the cases where the file adds nothing (pasted text, .txt) or where
+    we could not tell the AI which question we mean.
+    """
+    path = Path(q.project.source_path or "")
+    if not q.project.source_path or not path.exists():
+        return False              # pasted text — there is no paper to hand over
+    if path.suffix.lower() not in _VISUAL_SOURCES:
+        return False              # plain text: the extraction already is the document
+    if q.source_number is not None:
+        return True               # locatable by its own number in the file
+    # no number: we can still quote the question — unless it was a pure-image row, in
+    # which case only an attached figure can carry it.
+    if q.text.startswith(extractor.FIGURE_ONLY[:24]):
+        return False
+    return len(q.text.strip()) >= _QUOTABLE_CHARS
 
 
 def _figure_payload(q: Question) -> list[dict]:
@@ -244,15 +273,22 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
             "figures": _figure_payload(q),
         })
         if _wants_the_document(q):
-            # hand over the paper itself and ask for one numbered question
+            # A number only identifies a question if the paper uses it once. Spreadsheet
+            # exports and multi-section papers restart their numbering, and "answer
+            # question 11" against two different question 11s is a coin toss — so when the
+            # number is ambiguous we drop it and let the prompt quote the question instead.
+            number = q.source_number if _number_is_unique(q) else None
             batch[-1]["document"] = {
                 "url": f"/api/extension/document/{q.project_id}",
                 "filename": q.project.source_filename or "question-paper.pdf",
-                "number": q.source_number,
+                "number": number,
             }
             batch[-1]["prompt"] = solver.build_document_prompt(
-                q.text, q.qtype or "theory", q.marks, q.source_number)
-            batch[-1]["figures"] = []      # the document carries them
+                q.text, q.qtype or "theory", q.marks, number)
+            # If the AI can't find the question in the paper it answers NOT_FOUND, and the
+            # extension retries in a fresh chat with the plain prompt — a miss costs one
+            # extra chat, never a lost question.
+            batch[-1]["fallback_prompt"] = q.assist_prompt
     db.commit()
 
     return {

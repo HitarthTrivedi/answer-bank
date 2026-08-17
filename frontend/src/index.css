@@ -1,38 +1,100 @@
 @import 'tailwindcss';
 @import 'katex/dist/katex.min.css';
-@import 'highlight.js/styles/github-dark.css';
+@import 'highlight.js/styles/github.css';
+
+/* Paper, ink, and the greys in between — nothing else.
+   The answers carry tables, code, plots and diagrams; a coloured interface would
+   compete with them. Everything that needs to stand out does it with weight,
+   contrast and space instead of hue. */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  @apply bg-white text-neutral-900 antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
-/* rendered answer markdown */
+::selection {
+  @apply bg-neutral-900 text-white;
+}
+
+/* Focus rings: visible for keyboard users, invisible for mouse users. The whole app is
+   arrow-key driven, so this has to be right. */
+:focus-visible {
+  @apply outline-2 outline-offset-2 outline-neutral-900;
+}
+
+/* ---------------------------------------------------------------- answer markdown */
+
 .answer-md {
-  @apply text-[15px] leading-relaxed text-slate-200;
+  @apply text-[16px] leading-[1.75] text-neutral-800;
 }
-.answer-md h1, .answer-md h2, .answer-md h3 {
-  @apply mt-4 mb-2 font-semibold text-slate-100;
+.answer-md > *:first-child { @apply mt-0; }
+.answer-md > *:last-child { @apply mb-0; }
+
+.answer-md h1, .answer-md h2, .answer-md h3, .answer-md h4 {
+  @apply mt-8 mb-3 font-semibold tracking-tight text-neutral-900;
 }
-.answer-md h1 { @apply text-lg; }
-.answer-md h2 { @apply text-base; }
-.answer-md p { @apply my-2; }
-.answer-md ul { @apply my-2 list-disc pl-6 space-y-1; }
-.answer-md ol { @apply my-2 list-decimal pl-6 space-y-1; }
+.answer-md h1 { @apply text-xl; }
+.answer-md h2 { @apply text-lg; }
+.answer-md h3 { @apply text-base; }
+
+.answer-md p { @apply my-4; }
+.answer-md ul { @apply my-4 list-disc space-y-1.5 pl-6 marker:text-neutral-400; }
+.answer-md ol { @apply my-4 list-decimal space-y-1.5 pl-6 marker:text-neutral-400; }
+.answer-md li > ul, .answer-md li > ol { @apply my-1.5; }
+.answer-md hr { @apply my-8 border-neutral-200; }
+.answer-md strong { @apply font-semibold text-neutral-900; }
+.answer-md a { @apply underline decoration-neutral-300 underline-offset-2 hover:decoration-neutral-900; }
+
 .answer-md code:not(pre code) {
-  @apply rounded bg-slate-800 px-1.5 py-0.5 text-[13px] text-amber-300;
+  @apply rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[0.85em] text-neutral-900;
 }
 .answer-md pre {
-  @apply my-3 overflow-x-auto rounded-lg border border-slate-800 bg-[#0d1117] p-3 text-[13px];
+  @apply my-5 overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-[13px] leading-relaxed;
 }
-.answer-md table { @apply my-3 w-full border-collapse text-sm; }
-.answer-md th, .answer-md td { @apply border border-slate-700 px-3 py-1.5 text-left; }
-.answer-md th { @apply bg-slate-800/60 font-medium; }
-.answer-md blockquote { @apply my-2 border-l-2 border-indigo-500 pl-3 text-slate-400; }
-.answer-md .katex-display { @apply my-3 overflow-x-auto; }
-.answer-md strong { @apply text-slate-50; }
-.answer-md a { @apply text-indigo-400 underline; }
+
+/* Tables are the house style — a step trace, a comparison, a truth table. They get to
+   look like the most considered thing on the page, because they usually are. */
+.answer-md table {
+  @apply my-6 w-full border-collapse text-[15px];
+}
+.answer-md thead { @apply border-b border-neutral-900; }
+.answer-md th {
+  @apply px-3 py-2 text-left align-bottom font-semibold text-neutral-900;
+}
+.answer-md td {
+  @apply border-b border-neutral-200 px-3 py-2 align-top text-neutral-800;
+}
+.answer-md tbody tr:last-child td { @apply border-b-0; }
+
+.answer-md blockquote {
+  @apply my-5 border-l-2 border-neutral-900 pl-4 text-neutral-600;
+}
+.answer-md .katex-display { @apply my-6 overflow-x-auto overflow-y-hidden py-1; }
 .answer-md img, .answer-md svg { @apply max-w-full; }
+
+/* Wide content scrolls inside itself; the page never scrolls sideways. */
+.answer-md .scroll-x { @apply overflow-x-auto; }
+
+/* ------------------------------------------------------------------- transitions */
+
+@keyframes screen-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.screen-in {
+  animation: screen-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .screen-in { animation: none; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

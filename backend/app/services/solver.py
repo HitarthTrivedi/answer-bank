@@ -117,31 +117,66 @@ def build_solver_messages(text: str, qtype: str, marks: int | None,
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-_DOCUMENT_SYS = (
+_DOCUMENT_HEAD = (
     "The full question paper is attached to this chat. It contains the figures, graphs, "
-    "circuits and tables that the questions refer to — read them from the document.\n\n"
-    "Answer ONLY question {number}. Do not answer any other question, do not summarise "
-    "the paper, and do not restate the question. If question {number} refers to a figure, "
-    "read the values, labels, axes or connections off it and use them; never invent data.\n"
-    "If you genuinely cannot find question {number} in the attached document, reply with "
+    "circuits, tables and photographs that the questions refer to — read them from the "
+    "document itself. The paper may be a scan, a photo or a spreadsheet export; whatever "
+    "shape it is in, the question below is somewhere inside it.\n\n"
+)
+
+_DOCUMENT_TAIL = (
+    "Answer ONLY that one question. Do not answer any other question in the paper, do not "
+    "summarise the paper, and do not restate the question.\n"
+    "If it refers to a figure, graph, circuit, table or image, read the values, labels, "
+    "axes and connections off the attached document and use them. Never invent data. If a "
+    "figure is too blurred to read, say so in one line at the top rather than guessing.\n"
+    "If you genuinely cannot find that question in the attached document, reply with "
     "exactly: NOT_FOUND\n\n"
 )
 
+# How much of the question to quote back when the paper carries no usable numbering.
+# Long enough to be unique in a paper, short enough to survive OCR drift in the middle.
+_LOCATOR_CHARS = 160
 
-def build_document_prompt(text: str, qtype: str, marks: int | None, number: int) -> str:
-    """For a question whose meaning lives in the document — a graph to read, a circuit to
-    trace, a row that is nothing but a picture.
+
+def build_document_prompt(text: str, qtype: str, marks: int | None,
+                          number: int | None = None) -> str:
+    """For a question answered against the paper itself rather than against its extracted
+    text — a graph to read, a circuit to trace, a row that is nothing but a picture, or
+    simply a scan where our text extraction is the weakest link.
 
     Rather than extracting the figure and pasting it, we hand the AI the whole paper and
-    ask for one numbered question at a time. That sidesteps the entire problem of working
-    out which image belongs to which question: the document already says so, and the model
-    reading it is far better at that than any anchoring heuristic.
+    ask for one question at a time. That sidesteps the entire problem of working out which
+    image belongs to which question: the document already says so, and the model reading it
+    is far better at that judgement than any anchoring heuristic.
+
+    `number` is the question's own number *in the file*. When the paper has no usable
+    numbering — a photo of a handwritten sheet, a bulleted list, a spreadsheet export —
+    we locate the question by quoting its opening instead, so image questions in unnumbered
+    papers are not left stranded.
     """
     msgs = build_solver_messages(text, qtype, marks)
     body = text.strip()
-    asked = "" if body.startswith("[") else f"\n\nFor reference, the extracted text of that question was:\n{body}"
-    return (msgs[0]["content"] + "\n\n" + _DOCUMENT_SYS.format(number=number)
-            + f"<answer_question>{number}</answer_question>" + asked)
+    is_placeholder = body.startswith("[")
+
+    if number is not None:
+        locate = (f"Answer question {number} of the attached paper.\n"
+                  f"<answer_question>{number}</answer_question>\n")
+        if not is_placeholder:
+            locate += f"\nFor reference, the extracted text of question {number} was:\n{body}\n"
+    else:
+        # no number to point at — quote the question instead. A placeholder body means the
+        # row was pure image, so all we can offer is its position in reading order.
+        if is_placeholder:
+            locate = ("Find the question in the attached paper that consists of a figure, "
+                      "graph or image with no readable text of its own, and answer that one.\n")
+        else:
+            locate = ("Find the question in the attached paper that begins:\n"
+                      f"<answer_question>{body[:_LOCATOR_CHARS]}</answer_question>\n"
+                      "Match it to the paper even if the wording differs slightly — our text "
+                      "extraction is imperfect; the document is the truth.\n")
+
+    return msgs[0]["content"] + "\n\n" + _DOCUMENT_HEAD + locate + "\n" + _DOCUMENT_TAIL
 
 
 def build_assist_prompt(text: str, qtype: str, marks: int | None,

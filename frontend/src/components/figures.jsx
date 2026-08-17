@@ -74,11 +74,11 @@ export function Mermaid({ code }) {
   }, [code, answerId])
 
   if (failed) {
-    return <pre className="!bg-slate-900 text-xs text-slate-400">{code}</pre>
+    return <pre className="text-xs text-neutral-500">{code}</pre>
   }
   return (
     <div
-      className="my-3 overflow-x-auto rounded-lg bg-white p-3 [&_svg]:mx-auto [&_svg]:max-w-full"
+      className="my-6 overflow-x-auto rounded-lg border border-neutral-200 bg-white p-4 [&_svg]:mx-auto [&_svg]:max-w-full"
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   )
@@ -115,13 +115,13 @@ export function GraphImage({ spec }) {
   }, [spec, answerId])
 
   if (state === 'loading') {
-    return <div className="my-3 h-48 animate-pulse rounded-lg bg-slate-800/60" />
+    return <div className="my-6 h-48 animate-pulse rounded-lg bg-neutral-100" />
   }
   if (state === 'error') {
-    return <p className="my-2 text-xs text-slate-500">graph could not be rendered</p>
+    return <p className="my-4 text-[13px] text-neutral-400">this plot could not be drawn</p>
   }
   return (
-    <div className="my-3 overflow-hidden rounded-lg bg-white p-2">
+    <div className="my-6 overflow-hidden rounded-lg border border-neutral-200 bg-white p-3">
       <img src={url} alt="plot" className="mx-auto max-w-full" />
     </div>
   )

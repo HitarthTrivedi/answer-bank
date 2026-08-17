@@ -271,30 +271,105 @@ def test_a_question_naming_a_figure_it_lacks_is_flagged(client, auth):
     assert by_idx[1]["needs_figure"] is True, "a figure reference with no figure must be flagged"
 
 
-def test_a_figure_question_is_answered_from_the_whole_document(client, auth):
-    """A question whose meaning is in a picture gets the ORIGINAL FILE plus "answer only
-    question N", rather than an extracted image. The document already records which
-    figure belongs to which question — far more reliable than any anchoring we can do."""
+def test_an_uploaded_paper_is_answered_from_the_document_itself(client, auth):
+    """Every question in a bank we still hold the file for is answered against that file,
+    not against our extracted text — because the file is simply a better copy of the
+    question. It carries the figures, the tables and the original wording, and the model
+    reading it decides which picture belongs to which question far better than we can.
+
+    Extraction stays responsible for how many questions there are; never for what they say.
+    """
     pid = [p["id"] for p in client.get("/api/projects", headers=auth).json()
            if p["title"] == "Figure Bank"][0]
     client.post(f"/api/projects/{pid}/start", headers=auth)
     wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
 
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
-    doc_items = [b for b in batch if b.get("document")]
-    assert doc_items, "the figure question must be routed through document mode"
-    item = doc_items[0]
+    assert batch
+    assert all(b.get("document") for b in batch), "a file-backed bank answers from the file"
 
-    assert item["document"]["number"] == 2          # it was Q2 in the uploaded file
+    item = [b for b in batch if b["document"]["number"] == 2][0]   # it was Q2 in the file
     assert item["document"]["url"].endswith(pid)
-    assert f"<answer_question>{item['document']['number']}</answer_question>" in item["prompt"]
-    assert "Answer ONLY question 2" in item["prompt"]
-    assert item["figures"] == [], "the document carries the figure; don't paste it twice"
+    assert "<answer_question>2</answer_question>" in item["prompt"]
+    assert "Answer ONLY that one question" in item["prompt"]
+    # a paper the AI can't find the question in must not cost us the question
+    assert "<question>" in item["fallback_prompt"]
 
     # and the file itself is downloadable by its owner
     doc = client.get(item["document"]["url"], headers=auth)
     assert doc.status_code == 200
     assert doc.content[:2] == b"PK"                 # the docx we uploaded
+
+
+def test_the_review_save_keeps_figures_and_the_number_in_the_paper(client, auth):
+    """Saving the review must not cost a question the two things the student cannot retype.
+
+    This is the regression that quietly killed every image question: the save replaced the
+    rows, which set each figure's question_id to NULL and dropped the number the question
+    carried in the file. Both are invisible on the review screen, so nothing looked wrong —
+    the AI simply answered figure questions without ever seeing the figure.
+    """
+    r = client.post("/api/projects", headers=auth,
+                    data={"title": "Review Keeps Figures"},
+                    files={"file": ("bank.docx", _docx_with_figure(),
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    pid = r.json()["id"]
+    p = wait_for(client, auth, pid, lambda p: p["status"] == "review")
+
+    figure_q = [q for q in p["questions"] if q["figures"]][0]
+    assert figure_q["source_number"] == 2, "the review screen needs the file's own numbering"
+
+    # a normal review: fix a typo on one question, leave the rest alone
+    saved = client.put(f"/api/projects/{pid}/questions", headers=auth, json={"questions": [
+        {"id": q["id"], "text": q["text"] + " Explain briefly.", "marks": q["marks"],
+         "number": q["source_number"]}
+        for q in p["questions"]
+    ]}).json()
+
+    after = [q for q in saved["questions"] if q["id"] == figure_q["id"]][0]
+    assert after["figures"], "the figure must still belong to its question after review"
+    assert after["source_number"] == 2
+
+    # and a question the student deletes really goes
+    keep = [q for q in saved["questions"] if q["id"] != figure_q["id"]]
+    trimmed = client.put(f"/api/projects/{pid}/questions", headers=auth, json={
+        "questions": [{"id": q["id"], "text": q["text"], "marks": q["marks"]} for q in keep]}).json()
+    assert len(trimmed["questions"]) == len(keep)
+    assert figure_q["id"] not in [q["id"] for q in trimmed["questions"]]
+
+
+def test_a_repeated_number_is_not_trusted_to_identify_a_question():
+    """Spreadsheet exports and multi-section papers restart their numbering, so a paper can
+    hold two question 11s. "Answer question 11" is then a coin toss — the number has to be
+    thrown away and the question quoted instead."""
+    from types import SimpleNamespace
+
+    from app.routers.extension import _number_is_unique
+
+    def q(number):
+        return SimpleNamespace(source_number=number, project=project)
+
+    project = SimpleNamespace()
+    a, b, c = q(11), q(11), q(13)
+    project.questions = [a, b, c]
+
+    assert _number_is_unique(c) is True
+    assert _number_is_unique(a) is False
+    assert _number_is_unique(b) is False
+    assert _number_is_unique(q(None)) is False
+
+
+def test_an_unnumbered_question_is_located_by_quoting_it(client, auth):
+    """Papers without usable numbering — a photo of a sheet, a bulleted list — still get
+    document mode. We quote the question's opening instead of naming a number, so their
+    figure questions aren't the one case that falls through."""
+    from app.services import solver
+
+    prompt = solver.build_document_prompt(
+        "From the waveform shown, determine the peak-to-peak voltage.", "numerical", 5)
+    assert "<answer_question>From the waveform shown" in prompt
+    assert "Answer ONLY that one question" in prompt
+    assert "question None" not in prompt
 
 
 def test_the_document_is_not_offered_when_there_is_no_source_file(client, auth):

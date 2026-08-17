@@ -22,6 +22,12 @@ Prism answers it **one question at a time** — because dumping 40 questions int
 chatbot ruins answers 25–40 — with each question routed to the AI best suited for its
 type, then exports everything as a polished DOCX with working, code, plots and diagrams.
 
+**One question per screen.** The interface is monochrome and deliberately small: a
+question fills the page, its answer sits under it with room to breathe, and the arrow
+keys move to the next one. A rail across the top shows where you are and what's answered.
+The question number is in the URL, so back, reload and shared links all land in the right
+place. Nothing is stacked on one scrolling page.
+
 ## How it works
 
 ```
@@ -64,12 +70,16 @@ upload → split into questions → student reviews/edits → queue:
 - **Tables over pictures.** The house style pushes structured text wherever it works — a
   search trace is a step table, a comparison is a parameter table, a state space is an
   edge-cost table. It reads better, exports cleanly to DOCX, and costs nothing to produce.
-- **Figure questions get the whole paper, not a cropped image.** For a question whose
-  meaning is in a graph or circuit, the extension attaches the *original file* to a fresh
-  chat and asks "answer only question 7". The document already records which figure
-  belongs to which question — the model reading it judges that far better than any
-  anchoring heuristic could. No OCR, no vision API, no tesseract, and nothing for us to
-  get wrong. Extracted figures remain as a fallback when there's no source file.
+- **Answers come from the paper, not from our reading of it.** Whenever we still have the
+  uploaded file, the extension attaches it to a fresh chat and asks for one question —
+  "answer question 7", or, if the paper has no usable numbering, "answer the question that
+  begins …". The document already records which figure belongs to which question, and the
+  model reading it judges that far better than any anchoring heuristic could. So graphs,
+  circuits, tables, scans and spreadsheet layouts all work without us interpreting a single
+  pixel: no OCR, no vision API, no tesseract, nothing for us to get wrong. Extraction is
+  left responsible only for *how many* questions there are. If the AI can't find the
+  question in the paper it says so, and the extension retries once from the extracted text
+  plus any figure we anchored — a miss costs one extra chat, never the question.
 
 ## Making money
 
@@ -130,7 +140,7 @@ to paste into any AI tab by hand.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-24 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+44 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
 the full pipeline with a stand-in for the browser (`tests/helpers.py`), proof that no
 question is ever answered server-side, the export paywall (free bank → 402 → paid unlock
@@ -140,7 +150,7 @@ question to two tabs, honours `?exclude=` for AIs you aren't signed into, and re
 dead tab's question to the pool.
 
 ```bash
-cd extension && npm install && npm test    # 10 tests: the HTML → markdown converter
+cd extension && npm install && npm test    # 15 tests: the HTML → markdown converter + the manifest
 ```
 
 ## Repo layout
@@ -168,7 +178,7 @@ backend/
     payments.py          Razorpay payment links + mock gateway
   models.json            the router model (the only place a model is named)
   extension_selectors.json  DOM contract + per-site strengths + batch size
-frontend/                Vite + React + Tailwind dashboard
+frontend/                Vite + React + Tailwind — the one-question-per-screen deck
 extension/               Chrome MV3 extension (see its own README)
 sample_question_bank.txt demo input covering all five question types
 SECURITY_AUDIT.md        implemented controls + pre-launch checklist

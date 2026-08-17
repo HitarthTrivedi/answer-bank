@@ -120,7 +120,66 @@ def _build(raw: str, kept: list[dict]) -> list[dict]:
         # a row with no text is a question whose content is a figure — keep it, marked,
         # rather than silently losing it
         out.append(_finish(body.strip() or FIGURE_ONLY, c["offset"], c.get("num")))
-    return [q for q in out if len(q["text"]) >= 12]
+    return _recover_run_on_rows([q for q in out if len(q["text"]) >= 12])
+
+
+# Row numbers a spreadsheet export can bury inside the previous row's text: "…Explain
+# problem characteristics 7 8Write A* algorithm" is questions 6, 7 and 8, and only the
+# first survives a line-anchored pass. A number is only treated as a row number when the
+# next thing after it starts a new question — a capital, a quote, another row number, or
+# the end of the text.
+_ROW_NUMBER_FOLLOWS = re.compile(r"\s*(?:[A-Z\"“'‘]|\d|$)")
+_RUNON_LIMIT = 20
+
+
+def _split_at_row_number(text: str, number: int) -> tuple[str, str] | None:
+    """Split `text` where `number` is used as a row number. None if it isn't in there."""
+    padded = " " + text                       # so a leading "8Write" still has a boundary
+    for m in re.finditer(rf"(?<=[\s.,;:!?\)\]\"”'’]){number}(?![\d.])", padded):
+        if not _ROW_NUMBER_FOLLOWS.match(padded, m.end()):
+            continue                          # "there are 8 apples" is prose, not a row
+        return padded[1:m.start()].rstrip(), padded[m.end():].strip()
+    return None
+
+
+def _recover_run_on_rows(questions: list[dict]) -> list[dict]:
+    """Recover questions that a run-on row swallowed.
+
+    Only runs where the numbering *proves* something is missing: a jump from 6 to 9 means
+    7 and 8 are somewhere, and the only place they can be is inside question 6's text. A
+    contiguous run is left completely alone, which is what keeps this from second-guessing
+    a bank that extracted perfectly.
+    """
+    out: list[dict] = []
+    for i, q in enumerate(questions):
+        n = q.get("number")
+        nxt = questions[i + 1] if i + 1 < len(questions) else None
+        stop = nxt.get("number") if nxt else None          # None = last row, open-ended
+        if n is None or (stop is not None and stop <= n + 1):
+            out.append(q)
+            continue
+
+        pieces: list[tuple[int, str]] = []
+        text, num = q["text"], n
+        while (stop is None or num + 1 < stop) and len(pieces) < _RUNON_LIMIT:
+            found = _split_at_row_number(text, num + 1)
+            if found is None:
+                break
+            head, text = found
+            pieces.append((num, head))
+            num += 1
+        if not pieces:
+            out.append(q)
+            continue
+        pieces.append((num, text))
+
+        # spread the recovered rows across the span the original occupied, so figures
+        # anchored by character offset still land on the right one
+        end = nxt["offset"] if nxt else q["offset"] + max(len(q["text"]), 1)
+        step = max((end - q["offset"]) // len(pieces), 1)
+        for j, (number, body) in enumerate(pieces):
+            out.append(_finish(body.strip() or FIGURE_ONLY, q["offset"] + j * step, number))
+    return out
 
 
 def _finish(text: str, offset: int = 0, number: int | None = None) -> dict:
@@ -204,17 +263,51 @@ def heuristic_extract(raw: str) -> list[dict]:
     return _build(raw, cands)
 
 
+def _restore_numbered_gaps(cands: list[dict], kept: list[dict]) -> list[dict]:
+    """Put back candidates the model dropped from inside a numbering run.
+
+    The model judges candidates by their opening text, so a row whose question is nothing
+    but a picture reads as empty and gets dropped — losing precisely the diagram questions
+    this product goes to such lengths to answer. But a bank that runs 1…27 obviously has a
+    10, so a missing number *inside the kept range* is restored rather than trusted away.
+
+    Only inside the range, and only numbers not already present: numbered steps inside an
+    answer either reuse numbers we already have or sit outside the run, so neither comes
+    back through here.
+    """
+    numbers = [c["num"] for c in kept if c.get("num")]
+    if len(numbers) < _MARKER_CONFIDENCE:
+        return kept
+    lo, hi, have = min(numbers), max(numbers), set(numbers)
+    offsets = {c["offset"] for c in kept}
+    extra = [c for c in cands
+             if c.get("num") and lo < c["num"] < hi
+             and c["num"] not in have and c["offset"] not in offsets]
+    if not extra:
+        return kept
+    log.info("extractor restored %d numbered row(s) the model dropped", len(extra))
+    return sorted(kept + extra, key=lambda c: c["offset"])
+
+
 async def extract_questions(raw: str) -> list[dict]:
     cands = _candidates(raw)
     if not cands:
         return []
     kept = await _ai_select(cands)
-    return _dedupe(_build(raw, kept) if kept else heuristic_extract(raw))
+    if not kept:
+        return _dedupe(heuristic_extract(raw))
+    return _dedupe(_build(raw, _restore_numbered_gaps(cands, kept)))
 
 
 def _dedupe(questions: list[dict]) -> list[dict]:
     seen, out = set(), []
     for q in questions:
+        # Two picture rows have identical placeholder text and are still two different
+        # questions — collapsing them is the same silent loss the placeholder exists to
+        # prevent, so only real text is deduplicated.
+        if q["text"] == FIGURE_ONLY:
+            out.append(q)
+            continue
         key = re.sub(r"\s+", " ", q["text"].lower())[:200]
         if key not in seen:
             seen.add(key)

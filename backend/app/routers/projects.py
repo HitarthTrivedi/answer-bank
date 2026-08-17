@@ -46,6 +46,9 @@ def _own_answer(db: Session, user: User, answer_id: str) -> Answer:
 def _question_dict(q: Question) -> dict:
     d = {
         "id": q.id, "idx": q.idx, "text": q.text, "marks": q.marks,
+        # the number this question carried in the uploaded file — sent back on review so
+        # a save can't lose the only handle we have for "answer question 7 of that paper"
+        "source_number": q.source_number,
         "status": q.status, "qtype": q.qtype, "route_reason": q.route_reason,
         "error": q.error, "target_site": q.target_site,
         "figures": [{"id": f.id, "url": f"/api/figures/{f.id}"} for f in q.figures],
@@ -206,8 +209,12 @@ def delete_project(project_id: str, user: User = Depends(current_user), db: Sess
 
 
 class QuestionEdit(BaseModel):
+    # the row this edit belongs to. Without it a review save is a delete-and-recreate,
+    # which silently throws away everything the file told us about the question.
+    id: str | None = Field(default=None, max_length=32)
     text: str = Field(min_length=5, max_length=4000)
     marks: int | None = Field(default=None, ge=1, le=100)
+    number: int | None = Field(default=None, ge=1, le=999)
 
 
 class QuestionsUpdate(BaseModel):
@@ -217,15 +224,33 @@ class QuestionsUpdate(BaseModel):
 @router.put("/projects/{project_id}/questions")
 def update_questions(project_id: str, body: QuestionsUpdate,
                      user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Replace the extracted question list after student review (pre-processing only)."""
+    """Save the student's review of the extracted questions (pre-processing only).
+
+    Edited **in place**, not replaced. Two things hang off a question row that the review
+    screen never shows and the student cannot retype: the number the question carried in
+    the uploaded file, and the figures anchored to it. Recreating the rows dropped the
+    number and set every figure's question_id to NULL — so after review, the questions
+    whose meaning lived in a picture had neither the picture nor a way to point the AI at
+    them in the original paper. Matching on id keeps both.
+    """
     project = _own_project(db, user, project_id)
     if project.status not in ("review", "error"):
         raise HTTPException(409, "Questions can only be edited before processing starts")
-    for q in list(project.questions):
-        db.delete(q)
-    db.flush()
-    for i, q in enumerate(body.questions):
-        db.add(Question(project_id=project.id, idx=i, text=q.text.strip(), marks=q.marks))
+
+    existing = {q.id: q for q in project.questions}
+    for i, edit in enumerate(body.questions):
+        row = existing.pop(edit.id, None) if edit.id else None
+        if row is None:                      # a question the student added by hand
+            row = Question(project_id=project.id, source_number=edit.number)
+            project.questions.append(row)
+        elif edit.number is not None:
+            row.source_number = edit.number
+        row.idx = i
+        row.text = edit.text.strip()
+        row.marks = edit.marks
+    for removed in existing.values():   # questions the student deleted
+        project.questions.remove(removed)   # delete-orphan on the relationship does the rest
+
     project.status = "review"
     project.error = ""
     db.commit()

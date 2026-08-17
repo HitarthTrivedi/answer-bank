@@ -177,54 +177,59 @@ async function fetchDocument(url) {
   return { data: btoa(bin), mime: res.headers.get('content-type') || 'application/pdf' }
 }
 
-/** Answer a figure question by handing over the WHOLE paper.
+/** One prompt, one brand-new chat, one answer back. The single primitive both paths use.
  *
- *  Extracting an image and pasting it means guessing which picture belongs to which
- *  question. The document already answers that, and the model reading it is far better
- *  at the judgement than any anchoring heuristic — so attach the paper and ask for one
- *  numbered question. Still a fresh chat per question, so nothing accumulates. */
-async function answerFromDocument(item, cfg, sites) {
+ *  `doc` attaches the whole question paper before sending — that is how figures, graphs,
+ *  circuits and scanned layouts get answered without us ever interpreting a pixel.
+ *  Extracting an image and pasting it would mean guessing which picture belongs to which
+ *  question; the document already answers that, and the model reading it judges it far
+ *  better than any anchoring heuristic. */
+async function ask(item, cfg, sites, { prompt, doc, figures }) {
   const site = { key: item.site, ...sites[item.site] }
   const tab = await freshChatTab(site)
 
-  const doc = await fetchDocument(item.document.url)
-  const attached = await tell(tab.id, {
-    type: 'AB_ATTACH', site, data: doc.data, mime: doc.mime, filename: item.document.filename,
-  })
-  if (!attached.ok) throw new Error(attached.error)
+  if (doc) {
+    const file = await fetchDocument(doc.url)
+    const attached = await tell(tab.id, {
+      type: 'AB_ATTACH', site, data: file.data, mime: file.mime, filename: doc.filename,
+    })
+    if (!attached.ok) throw new Error(attached.error)
+    await sleep(cfg.upload_settle_ms || 4000)  // the upload must finish before a send lands
+  }
 
-  // the upload has to finish before the site will accept a send
-  await sleep(cfg.upload_settle_ms || 4000)
-
-  const sent = await tell(tab.id, { type: 'AB_SEND', text: item.prompt, site, figures: [] })
+  const sent = await tell(tab.id, { type: 'AB_SEND', text: prompt, site, figures: figures || [] })
   if (!sent.ok) throw new Error(sent.error)
 
   const markdown = await waitForAnswer(tab.id, cfg, site)
   if (!markdown || markdown.length < 10) throw new Error('empty_answer')
-  if (markdown.trim().startsWith('NOT_FOUND')) throw new Error('question_not_found_in_document')
-
-  await apiFetch(`/questions/${item.question_id}/assist`, {
-    method: 'POST', body: { content_md: markdown },
-  })
-  return site
+  return markdown
 }
 
-/** Answer one question start-to-finish in its own fresh chat. */
+/** Answer one question start-to-finish, preferring the paper itself when we have it.
+ *
+ *  A paper the AI can't locate the question in isn't a lost question: it says NOT_FOUND
+ *  and we retry once from the extracted text, with any figure we managed to anchor. */
 async function answerOne(item, cfg, sites) {
-  const site = { key: item.site, ...sites[item.site] }
-  const tab = await freshChatTab(site)
-  const sent = await tell(tab.id, {
-    type: 'AB_SEND', text: item.prompt, site, figures: item.figures || [],
-  })
-  if (!sent.ok) throw new Error(sent.error)
+  let markdown = null
 
-  const markdown = await waitForAnswer(tab.id, cfg, site)
-  if (!markdown || markdown.length < 10) throw new Error('empty_answer')
+  if (item.document) {
+    markdown = await ask(item, cfg, sites, {
+      prompt: item.prompt, doc: item.document, figures: [],
+    })
+    if (markdown.trim().startsWith('NOT_FOUND')) markdown = null
+  }
+
+  if (markdown === null) {
+    markdown = await ask(item, cfg, sites, {
+      prompt: item.fallback_prompt || item.prompt,
+      figures: item.figures || [],
+    })
+  }
 
   await apiFetch(`/questions/${item.question_id}/assist`, {
     method: 'POST', body: { content_md: markdown },
   })
-  return site
+  return { key: item.site, ...sites[item.site] }
 }
 
 async function runLoop() {
@@ -257,8 +262,7 @@ async function runLoop() {
         `${batch.map((b) => cfg.sites[b.site].label).join(', ')} answering together`)
 
     // all three run at once; Promise.allSettled so one bad tab can't sink the batch
-    const results = await Promise.allSettled(batch.map((item) =>
-      item.document ? answerFromDocument(item, cfg, cfg.sites) : answerOne(item, cfg, cfg.sites)))
+    const results = await Promise.allSettled(batch.map((item) => answerOne(item, cfg, cfg.sites)))
 
     let progressed = false
     results.forEach((r, i) => {
