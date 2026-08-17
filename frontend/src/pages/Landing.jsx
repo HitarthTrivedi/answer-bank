@@ -13,7 +13,7 @@ const POINTS = [
    'Graphs, circuits, tables, scanned pages. Your AI is handed the original file and asked ' +
    'for one question at a time, so it reads the picture the question actually refers to.'],
   ['Your own AI does the work',
-   'It runs in the ChatGPT, Claude, Gemini or Kimi tab you are already signed into — each ' +
+   'It runs in the ChatGPT, Claude or Gemini tab you are already signed into — each ' +
    'question going to whichever of them answers that kind best. Answering is free; the ' +
    'finished document is ₹20.'],
 ]

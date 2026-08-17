@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prism Runner",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Answers your question bank using the AI tabs you're already signed into.",
   "permissions": [
     "storage",
@@ -15,10 +15,7 @@
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
-    "https://gemini.google.com/*",
-    "https://www.kimi.com/*",
-    "https://kimi.com/*",
-    "https://kimi.moonshot.cn/*"
+    "https://gemini.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -43,10 +40,7 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",
         "https://claude.ai/*",
-        "https://gemini.google.com/*",
-        "https://www.kimi.com/*",
-        "https://kimi.com/*",
-        "https://kimi.moonshot.cn/*"
+        "https://gemini.google.com/*"
       ],
       "js": [
         "content/html2md.js",

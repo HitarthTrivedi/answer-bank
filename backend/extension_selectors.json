@@ -3,14 +3,14 @@
   "version": 1,
   "default_site": "chatgpt",
   "routing": {
-    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. Nothing reassigns a question afterwards to even out load — except an assistant the student isn't signed into, or one that can't take the file uploads a document question needs. A LIST value rotates questions of that type across the sites named — theory is the bulk of every bank and carries no file, so it is shared between the two sites with unlimited text chat instead of piling on one. See _routing_evidence for why each type lands where it does.",
+    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. A LIST value rotates questions of that type across the sites named — theory is the bulk of every bank and carries no file, so it is shared between sites with text headroom instead of piling on one. Graphs go to ChatGPT by the owner's decision. See _routing_evidence.",
     "numerical": "chatgpt",
     "code": "claude",
-    "graph": "gemini",
+    "graph": "chatgpt",
     "diagram": "gemini",
     "theory": [
-      "kimi",
-      "chatgpt"
+      "chatgpt",
+      "gemini"
     ]
   },
   "settle_ms": 1200,
@@ -49,7 +49,7 @@
         "a[href*='/auth/login']",
         "button[data-testid='login-button']"
       ],
-      "strengths": "best at numerical working and step-by-step math — leads math reasoning benchmarks (AIME) — and writes clean LaTeX. Fast, and the clearest explainer of the four.",
+      "strengths": "best at numerical working and step-by-step math (leads math reasoning benchmarks), clean LaTeX, and reading/producing graphs — plots and curve questions go here. Fast, and the clearest explainer.",
       "free_tier": "unlimited text chat, but only 3 FILE UPLOADS PER DAY — so it is excellent for questions whose text is all you need, and nearly useless for questions that need the paper attached",
       "documents": "rare"
     },
@@ -119,64 +119,19 @@
       "login_hint": [
         "a[href*='accounts.google.com']"
       ],
-      "strengths": "best at anything visual or spatial — reading a graph, circuit, table or scanned page out of an attached document, and producing plots and diagrams. Recommended for visual STEM.",
+      "strengths": "best at diagrams and anything spatial — flowcharts, ER, architecture — and at reading figures out of an attached document; generous with file uploads, so it carries document mode.",
       "free_tier": "compute-pooled with 5-hour resets, and generous with files: 10 uploads per prompt at 100 MB each. Good headroom for questions that need the paper attached.",
       "documents": "generous"
-    },
-    "kimi": {
-      "label": "Kimi",
-      "url": "https://www.kimi.com/",
-      "match": [
-        "kimi.com",
-        "www.kimi.com",
-        "kimi.moonshot.cn"
-      ],
-      "_selector_note": "UNVERIFIED against the live site — same status as the other three (see HANDOVER P0-1). Deliberately generic: the composer and send button are matched structurally so a class change doesn't break them.",
-      "composer": [
-        "div[contenteditable='true'][data-testid*='chat']",
-        "div.chat-input-editor[contenteditable='true']",
-        "textarea[placeholder]",
-        "div[contenteditable='true']"
-      ],
-      "send": [
-        "div[data-testid='msh-chatinput-send-button']",
-        "button[data-testid*='send']",
-        "button[aria-label*='Send']",
-        "button.send-button"
-      ],
-      "stop": [
-        "div[data-testid='msh-chatinput-stop-button']",
-        "button[data-testid*='stop']",
-        "button[aria-label*='Stop']"
-      ],
-      "turn": [
-        "div[data-testid='chat-segment-assistant']",
-        "div.segment-assistant",
-        "div[class*='assistant']"
-      ],
-      "content": [
-        "div.markdown",
-        "div[class*='markdown']",
-        ":scope"
-      ],
-      "login_hint": [
-        "button[data-testid*='login']",
-        "a[href*='/login']"
-      ],
-      "strengths": "slowest of the four, but the most patient with a long attached document — it reads a whole question paper without truncating it, and produces tables and plotted figures for questions built on data.",
-      "free_tier": "no message cap and no upload cap on standard chat, on the current flagship model. The only site that can absorb a whole figure-heavy bank, so it carries the bulk.",
-      "documents": "unlimited"
     }
   },
   "batch_size": 3,
   "upload_settle_ms": 4000,
   "_upload_note": "How long to wait after attaching a file before pressing send. A chat site rejects a send while an upload is still in flight, and a big question paper takes seconds.",
-  "_routing_evidence": "Routing is set from measured strengths AND free-tier capacity, checked August 2026. Capacity is the half everyone forgets and it is the half that breaks a 28-question run: ChatGPT gives unlimited text chat but only 3 FILE UPLOADS A DAY, and this product uploads the question paper once per question. Claude has the smallest free allowance of the four (a compute pool on 5-hour windows, ~15 messages in practice) and is also the best writer, so it gets the questions where depth actually earns marks rather than the bulk. Kimi's free tier has no message cap and no upload cap and reads long PDFs without truncating, which makes it the only site that can absorb a whole figure-heavy bank. Re-check these before launch: free tiers move every few months.",
+  "_routing_evidence": "Routing is set from measured strengths AND free-tier capacity (checked August 2026), across the three sites the product drives: ChatGPT, Claude, Gemini. Kimi was tried as a fourth and dropped by the owner's decision after live testing. Capacity notes: ChatGPT free gives unlimited text chat but ~3 FILE UPLOADS/day, so document-mode questions lean on Gemini (10 uploads per prompt) first. Claude's free pool is the smallest (~15 messages per 5-hour window) and it is the strongest writer/coder, so it gets code and the high-mark structured answers, never the bulk. Graph questions go to ChatGPT per the owner's preference. Re-check free tiers before launch — they move every few months.",
   "document_sites": [
-    "kimi",
     "gemini",
     "claude",
     "chatgpt"
   ],
-  "_document_sites_note": "Document mode uploads the question paper once per question. Only sites that can take that volume belong near the front of this list — ChatGPT's 3-uploads-a-day free limit is spent before the first batch of three finishes, so it sits last and is used only when nothing else is available."
+  "_document_sites_note": "Ordered preference for a question answered by attaching the paper. Document mode uploads the file once per question, so upload headroom decides the order: Gemini (10 per prompt) first, Claude (5 per chat) next, ChatGPT (3 per DAY) last and only when nothing else is available."
 }

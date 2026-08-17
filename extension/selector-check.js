@@ -1,4 +1,4 @@
-// Prism — selector check. Paste into the DevTools console on ChatGPT, Claude, Gemini, Kimi.
+// Prism — selector check. Paste into the DevTools console on ChatGPT, Claude, Gemini.
 // Generated from backend/extension_selectors.json; regenerate with:
 //   node tools/gen-selector-check.mjs
 (() => {
@@ -96,52 +96,13 @@
     "login_hint": [
       "a[href*='accounts.google.com']"
     ]
-  },
-  "kimi": {
-    "label": "Kimi",
-    "match": [
-      "kimi.com",
-      "www.kimi.com",
-      "kimi.moonshot.cn"
-    ],
-    "composer": [
-      "div[contenteditable='true'][data-testid*='chat']",
-      "div.chat-input-editor[contenteditable='true']",
-      "textarea[placeholder]",
-      "div[contenteditable='true']"
-    ],
-    "send": [
-      "div[data-testid='msh-chatinput-send-button']",
-      "button[data-testid*='send']",
-      "button[aria-label*='Send']",
-      "button.send-button"
-    ],
-    "stop": [
-      "div[data-testid='msh-chatinput-stop-button']",
-      "button[data-testid*='stop']",
-      "button[aria-label*='Stop']"
-    ],
-    "turn": [
-      "div[data-testid='chat-segment-assistant']",
-      "div.segment-assistant",
-      "div[class*='assistant']"
-    ],
-    "content": [
-      "div.markdown",
-      "div[class*='markdown']",
-      ":scope"
-    ],
-    "login_hint": [
-      "button[data-testid*='login']",
-      "a[href*='/login']"
-    ]
   }
 };
 
   const host = location.hostname;
   const entry = Object.entries(SITES).find(([, s]) => s.match.some((m) => host.includes(m)));
   if (!entry) {
-    console.log('%cThis is not one of the sites Prism drives (ChatGPT, Claude, Gemini, Kimi).', 'color:#c00');
+    console.log('%cThis is not one of the sites Prism drives (ChatGPT, Claude, Gemini).', 'color:#c00');
     return;
   }
   const [key, site] = entry;
