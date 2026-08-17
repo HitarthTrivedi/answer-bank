@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_extension_config
@@ -200,7 +201,8 @@ def _preference(q: Question, fallback: dict, doc_order: list[str],
                 roomy: set[str], roomy_order: list[str]) -> list[str]:
     """Where this question would like to go, best first."""
     if not paper.answered_from_document(q):
-        return [q.target_site, fallback.get(q.qtype or "theory")]
+        alt = fallback.get(q.qtype or "theory")
+        return [q.target_site, *(alt if isinstance(alt, list) else [alt])]
 
     # The paper goes up with it, so upload headroom is the binding constraint. Keep the
     # router's pick when the question is *about* a figure and that site has room — judging
@@ -294,6 +296,38 @@ def next_batch(
     """A batch of questions to answer concurrently — one per available assistant."""
     size = int(get_extension_config().get("batch_size", 3))
     return _lease(db, user, project_id, exclude, size)
+
+
+class WorkReport(BaseModel):
+    question_id: str = Field(max_length=32)
+    error: str = Field(default="", max_length=500)
+
+
+@router.post("/report")
+def report_failure(body: WorkReport, user: User = Depends(current_user),
+                   db: Session = Depends(get_db)):
+    """The extension telling us a question failed in its tab, and why.
+
+    Without this, a failure was invisible everywhere that matters: the lease stranded the
+    question in `assist_running` for ten minutes, the dashboard showed nothing, the server
+    log showed nothing, and debugging a broken site meant asking the student to open the
+    service-worker console. Twelve questions once sat stuck this way while everyone
+    involved wondered what was happening.
+
+    Reporting releases the lease immediately — the question is back in the pool for the
+    very next batch — and pins the reason on the question where the UI can show it.
+    """
+    q = db.get(Question, body.question_id)
+    if q is None or q.project.user_id != user.id:
+        raise HTTPException(404, "Question not found")
+    if q.status == "assist_running":
+        q.status = "assist_waiting"
+        q.leased_at = None
+    q.error = body.error.strip()
+    db.commit()
+    if q.error:
+        log.warning("extension failure on Q%d of %s: %s", q.idx + 1, q.project_id, q.error)
+    return {"ok": True}
 
 
 @router.get("/work")

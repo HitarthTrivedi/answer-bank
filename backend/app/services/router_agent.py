@@ -109,9 +109,20 @@ def _system_prompt() -> str:
     )
 
 
-def _default_site(qtype: str) -> str:
+def _default_site(qtype: str, salt: int = 0) -> str:
+    """The fallback assistant for a question type.
+
+    A list value in the routing map means "rotate across these" — `salt` (the question's
+    position) picks which. This is what keeps a keyword-routed bank from piling entirely
+    onto one site: theory is the bulk of every bank, and when the routing model's quota is
+    spent — a normal Tuesday — every theory question used to land on the same assistant
+    while two others sat idle.
+    """
     cfg = get_extension_config()
-    return cfg.get("routing", {}).get(qtype, cfg.get("default_site", "chatgpt"))
+    site = cfg.get("routing", {}).get(qtype, cfg.get("default_site", "chatgpt"))
+    if isinstance(site, list):
+        return site[salt % len(site)] if site else cfg.get("default_site", "chatgpt")
+    return site
 
 
 async def classify(text: str) -> dict:
@@ -233,7 +244,7 @@ async def classify_many(texts: list[str]) -> list[dict]:
                         continue
                     site = str(r.get("site", "")).lower().strip()
                     out[start + i] = {"qtype": qtype,
-                                      "site": site if site in keys else _default_site(qtype),
+                                      "site": site if site in keys else _default_site(qtype, salt=start + i),
                                       "reason": str(r.get("reason", ""))[:300]}
                     got += 1
                 if got:
@@ -245,6 +256,6 @@ async def classify_many(texts: list[str]) -> list[dict]:
     for i, slot in enumerate(out):
         if slot is None:
             guess = heuristic_classify(texts[i])
-            guess["site"] = _default_site(guess["qtype"])
+            guess["site"] = _default_site(guess["qtype"], salt=i)  # rotate the bulk type
             out[i] = guess
     return out

@@ -322,9 +322,19 @@ function Waiting({ q, project, active, onChanged }) {
   if (!hasExt) return <ExtensionNeeded onManual={() => setManual(true)} />
 
   return (
-    <div className="flex flex-wrap items-center gap-6">
-      <Button onClick={run}>Answer with my AI</Button>
-      <Text onClick={() => setManual(true)}>or paste it in myself</Text>
+    <div className="space-y-4">
+      {/* a failure reported by the extension — the question came back to the pool */}
+      {q.error && (
+        <p className="text-[13px] text-neutral-500">
+          Last try failed in {SITE_NAMES[q.target_site] || 'the AI tab'}:{' '}
+          <span className="text-neutral-700">{q.error}</span> — it goes out again with the
+          next batch.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-6">
+        <Button onClick={run}>Answer with my AI</Button>
+        <Text onClick={() => setManual(true)}>or paste it in myself</Text>
+      </div>
     </div>
   )
 }

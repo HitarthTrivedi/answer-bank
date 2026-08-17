@@ -308,9 +308,16 @@ async function runLoop() {
         return
       }
       const msg = String(r.reason && r.reason.message ? r.reason.message : r.reason)
+      // Tell the server. This releases the lease instantly — the question is back in the
+      // pool for the next batch instead of stranded 'running' for ten minutes — and it
+      // puts the reason where the dashboard and the server log can show it, so a broken
+      // site is diagnosable without opening the service-worker console.
+      apiFetch('/extension/report', {
+        method: 'POST',
+        body: { question_id: item.question_id, error: msg === 'stopped' ? '' : msg },
+      }).catch(() => { /* reporting is best-effort */ })
       if (msg.startsWith('not_signed_in:')) {
-        // drop that assistant for the rest of the run; its questions go back in the pool
-        // when the lease expires, and the next batch routes them elsewhere
+        // drop that assistant for the rest of the run; the next batch routes elsewhere
         unavailable.add(msg.split(':')[1])
         return
       }

@@ -3,12 +3,15 @@
   "version": 1,
   "default_site": "chatgpt",
   "routing": {
-    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. Nothing reassigns a question afterwards to even out load — except an assistant the student isn't signed into, or one that can't take the file uploads a document question needs. See _routing_evidence for why each type lands where it does.",
+    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. Nothing reassigns a question afterwards to even out load — except an assistant the student isn't signed into, or one that can't take the file uploads a document question needs. A LIST value rotates questions of that type across the sites named — theory is the bulk of every bank and carries no file, so it is shared between the two sites with unlimited text chat instead of piling on one. See _routing_evidence for why each type lands where it does.",
     "numerical": "chatgpt",
     "code": "claude",
     "graph": "gemini",
     "diagram": "gemini",
-    "theory": "kimi"
+    "theory": [
+      "kimi",
+      "chatgpt"
+    ]
   },
   "settle_ms": 1200,
   "poll_ms": 1500,

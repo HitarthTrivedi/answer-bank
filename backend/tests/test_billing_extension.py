@@ -162,12 +162,18 @@ def test_a_batch_follows_the_router_even_when_that_means_one_assistant(client, a
     pid = _started_project(client, auth, "Batch Bank", text=BIG_BANK)
 
     from app.config import get_extension_config
-    theory_site = get_extension_config()["routing"]["theory"]
+    theory = get_extension_config()["routing"]["theory"]
+    # theory is the bulk type, so its fallback ROTATES across sites with text headroom —
+    # a bank keyword-routed while the model's quota is spent must not pile on one site
+    theory_sites = set(theory if isinstance(theory, list) else [theory])
 
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
     assert len(batch) == 3
-    # every question in BIG_BANK is theory, so every one belongs on the same assistant
-    assert {b["site"] for b in batch} == {theory_site}
+    # every question in BIG_BANK is theory; each goes where the router (here: the
+    # rotating fallback) sent it, and nothing downstream reassigns it
+    assert {b["site"] for b in batch} <= theory_sites
+    if len(theory_sites) > 1:
+        assert len({b["site"] for b in batch}) > 1, "the rotation must actually rotate"
     assert all(b["site"] == b["route_site"] for b in batch), "no slot may override the router"
     assert all(b["prompt"] and "<question>" in b["prompt"] for b in batch)
 
