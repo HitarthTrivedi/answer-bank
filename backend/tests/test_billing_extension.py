@@ -149,16 +149,26 @@ BIG_BANK = "".join(
 )
 
 
-def test_a_batch_spreads_across_distinct_assistants(client, auth):
-    """The whole point: 3 questions go to 3 DIFFERENT AIs at once, so no single free
-    tier absorbs the entire bank."""
+def test_a_batch_follows_the_router_even_when_that_means_one_assistant(client, auth):
+    """Three questions at once, each going wherever the router sent it — including all
+    three to the same assistant.
+
+    An earlier version forced every batch across three *distinct* sites to spread load.
+    That quietly overrode the routing decision on two questions out of every three, which
+    trades the thing the router exists for against a rate limit nobody had hit. Spread now
+    falls out of the routing itself: different question types go to different sites.
+    """
     pid = _started_project(client, auth, "Batch Bank", text=BIG_BANK)
 
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
     assert len(batch) == 3
-    sites = [b["site"] for b in batch]
-    assert len(set(sites)) == 3, f"expected 3 distinct assistants, got {sites}"
+    # every question in BIG_BANK is theory, so every one belongs on the same assistant
+    assert {b["site"] for b in batch} == {"claude"}
+    assert all(b["site"] == b["route_site"] for b in batch), "no slot may override the router"
     assert all(b["prompt"] and "<question>" in b["prompt"] for b in batch)
+
+    # and they are still three separate chats, in paper order
+    assert [b["idx"] for b in batch] == [1, 2, 3]
 
     # leased questions are not handed out twice
     second = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
@@ -166,10 +176,12 @@ def test_a_batch_spreads_across_distinct_assistants(client, auth):
 
 
 def test_a_batch_only_uses_assistants_the_student_is_signed_into(client, auth):
+    """The one thing that may override the router: an assistant the student can't reach.
+    A second-best answer beats no answer."""
     pid = _started_project(client, auth, "Excluded Bank", text=BIG_BANK)
     res = client.get(f"/api/extension/batch?project_id={pid}&exclude=claude,gemini",
                      headers=auth).json()
-    assert [b["site"] for b in res["batch"]] == ["chatgpt"]
+    assert [b["site"] for b in res["batch"]] == ["chatgpt", "chatgpt", "chatgpt"]
 
     res = client.get(f"/api/extension/batch?project_id={pid}&exclude=chatgpt,claude,gemini",
                      headers=auth).json()
@@ -338,13 +350,60 @@ def test_the_review_save_keeps_figures_and_the_number_in_the_paper(client, auth)
     assert figure_q["id"] not in [q["id"] for q in trimmed["questions"]]
 
 
+def test_a_whole_bank_is_routed_in_one_call(client, auth):
+    """Routing costs one call per *bank*, not one per question.
+
+    A free tier's daily allowance is measured in tens, so a 28-question bank routed one
+    question at a time runs out of routing before it runs out of questions — and the
+    fallback is keywords, which is exactly the judgement we were paying for."""
+    from app.services import providers, router_agent
+
+    calls = []
+    original = providers.chat
+
+    async def counting(provider, model, messages, **kw):
+        calls.append(messages[0]["content"][:20])
+        return await original(provider, model, messages, **kw)
+
+    providers.chat = counting
+    try:
+        import asyncio
+        routes = asyncio.run(
+            router_agent.classify_many([f"{i}. Explain concept {i}." for i in range(12)]))
+    finally:
+        providers.chat = original
+
+    assert len(routes) == 12
+    assert all(r["qtype"] in router_agent.QTYPES for r in routes)
+    assert all(r["site"] for r in routes)
+    assert len(calls) == 1, f"12 questions must cost one call, not {len(calls)}"
+
+
+def test_figure_questions_are_grouped_apart_from_theory(client, auth):
+    """The deck shows figure questions in their own row. They're the ones worth a second
+    look: a misread diagram becomes a confident wrong answer rather than an obvious blank,
+    so burying them among thirty theory questions is exactly where they get missed."""
+    pid = _started_project(
+        client, auth, "Mixed Bank",
+        text="1. Define normalization in DBMS. (5 marks)\n"
+             "2. From the graph shown above, find the peak voltage. (5 marks)\n"
+             "3. Compare TCP and UDP. (5 marks)\n"
+             "4. Draw the ER diagram for a library system. (10 marks)\n")
+    qs = client.get(f"/api/projects/{pid}", headers=auth).json()["questions"]
+    visual = {q["idx"]: q["visual"] for q in qs}
+
+    assert visual[1] is True, "a question reading a graph belongs in the figure row"
+    assert visual[3] is True, "so does one that has to draw a diagram"
+    assert visual[0] is False and visual[2] is False
+
+
 def test_a_repeated_number_is_not_trusted_to_identify_a_question():
     """Spreadsheet exports and multi-section papers restart their numbering, so a paper can
     hold two question 11s. "Answer question 11" is then a coin toss — the number has to be
     thrown away and the question quoted instead."""
     from types import SimpleNamespace
 
-    from app.routers.extension import _number_is_unique
+    from app.services.paper import number_is_unique
 
     def q(number):
         return SimpleNamespace(source_number=number, project=project)
@@ -353,10 +412,10 @@ def test_a_repeated_number_is_not_trusted_to_identify_a_question():
     a, b, c = q(11), q(11), q(13)
     project.questions = [a, b, c]
 
-    assert _number_is_unique(c) is True
-    assert _number_is_unique(a) is False
-    assert _number_is_unique(b) is False
-    assert _number_is_unique(q(None)) is False
+    assert number_is_unique(c) is True
+    assert number_is_unique(a) is False
+    assert number_is_unique(b) is False
+    assert number_is_unique(q(None)) is False
 
 
 def test_an_unnumbered_question_is_located_by_quoting_it(client, auth):

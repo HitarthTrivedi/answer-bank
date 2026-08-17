@@ -99,30 +99,48 @@ function tell(tabId, msg) {
   })
 }
 
-async function findTab(site) {
+/** Tabs currently answering a question. A batch can now put three questions on the SAME
+ *  assistant — the router sends every diagram question to whoever reads diagrams best —
+ *  and without this they would all grab the one open ChatGPT tab and overwrite each
+ *  other's prompt. One question, one tab, always. */
+const claimed = new Set()
+
+async function findFreeTab(site) {
   for (const host of site.match) {
     const tabs = await chrome.tabs.query({ url: `*://${host}/*` })
-    if (tabs.length) return tabs[0]
+    const free = tabs.find((t) => !claimed.has(t.id))
+    if (free) return free
   }
   return null
 }
 
-/** A tab on `site`, parked on a brand-new empty chat, with the driver alive in it. */
+/** A tab on `site`, parked on a brand-new empty chat, with the driver alive in it.
+ *  Claimed for the caller until it calls `release`. */
 async function freshChatTab(site) {
-  let tab = await findTab(site)
+  let tab = await findFreeTab(site)
   if (!tab) tab = await chrome.tabs.create({ url: site.url, active: false })
   else await chrome.tabs.update(tab.id, { url: site.url })
+  claimed.add(tab.id)
 
-  for (let i = 0; i < 60; i++) {
-    await sleep(500)
-    let info
-    try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
-    if (info.status !== 'complete') continue
-    const ping = await tell(tab.id, { type: 'AB_PING', site })
-    if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
-    if (ping.ok && ping.hasComposer) return tab
+  try {
+    for (let i = 0; i < 60; i++) {
+      await sleep(500)
+      let info
+      try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
+      if (info.status !== 'complete') continue
+      const ping = await tell(tab.id, { type: 'AB_PING', site })
+      if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
+      if (ping.ok && ping.hasComposer) return tab
+    }
+    throw new Error(`composer_never_appeared:${site.key}`)
+  } catch (e) {
+    claimed.delete(tab.id)   // a tab we never got working must not stay reserved
+    throw e
   }
-  throw new Error(`composer_never_appeared:${site.key}`)
+}
+
+function release(tab) {
+  if (tab) claimed.delete(tab.id)
 }
 
 // ---------------------------------------------------------------- the run loop
@@ -187,22 +205,25 @@ async function fetchDocument(url) {
 async function ask(item, cfg, sites, { prompt, doc, figures }) {
   const site = { key: item.site, ...sites[item.site] }
   const tab = await freshChatTab(site)
+  try {
+    if (doc) {
+      const file = await fetchDocument(doc.url)
+      const attached = await tell(tab.id, {
+        type: 'AB_ATTACH', site, data: file.data, mime: file.mime, filename: doc.filename,
+      })
+      if (!attached.ok) throw new Error(attached.error)
+      await sleep(cfg.upload_settle_ms || 4000)  // the upload must finish before a send lands
+    }
 
-  if (doc) {
-    const file = await fetchDocument(doc.url)
-    const attached = await tell(tab.id, {
-      type: 'AB_ATTACH', site, data: file.data, mime: file.mime, filename: doc.filename,
-    })
-    if (!attached.ok) throw new Error(attached.error)
-    await sleep(cfg.upload_settle_ms || 4000)  // the upload must finish before a send lands
+    const sent = await tell(tab.id, { type: 'AB_SEND', text: prompt, site, figures: figures || [] })
+    if (!sent.ok) throw new Error(sent.error)
+
+    const markdown = await waitForAnswer(tab.id, cfg, site)
+    if (!markdown || markdown.length < 10) throw new Error('empty_answer')
+    return markdown
+  } finally {
+    release(tab)
   }
-
-  const sent = await tell(tab.id, { type: 'AB_SEND', text: prompt, site, figures: figures || [] })
-  if (!sent.ok) throw new Error(sent.error)
-
-  const markdown = await waitForAnswer(tab.id, cfg, site)
-  if (!markdown || markdown.length < 10) throw new Error('empty_answer')
-  return markdown
 }
 
 /** Answer one question start-to-finish, preferring the paper itself when we have it.
@@ -235,6 +256,7 @@ async function answerOne(item, cfg, sites) {
 async function runLoop() {
   const cfg = await apiFetch('/extension/config')
   unavailable.clear()
+  claimed.clear()   // a previous run that was stopped mid-answer must not reserve tabs forever
   state.sitesUsed = []
 
   while (state.running && !state.stopRequested) {

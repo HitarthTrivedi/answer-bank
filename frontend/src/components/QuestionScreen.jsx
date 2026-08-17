@@ -47,7 +47,10 @@ export default function QuestionScreen({ q, index, total, project, mode, run, on
 function Meta({ q }) {
   const bits = []
   if (q.marks) bits.push(`${q.marks} mark${q.marks === 1 ? '' : 's'}`)
-  if (q.qtype) bits.push(q.qtype)
+  // which row of the rail this one sits in — worth saying, because a figure question is
+  // the kind where a misread paper turns into a confident wrong answer
+  if (q.visual) bits.push('reads a figure')
+  if (q.qtype && !(q.visual && ['graph', 'diagram'].includes(q.qtype))) bits.push(q.qtype)
   if (q.answer?.verified === false) bits.push('check the working')
   if (!bits.length) return null
   return (
@@ -188,8 +191,12 @@ function Answered({ q, onChanged }) {
         </Text>
         <Text onClick={() => { setDraft(q.answer.content_md); setEditing(true) }}>Edit</Text>
         <Regenerate q={q} onChanged={onChanged} label="Answer again" asText />
-        <span className="ml-auto text-[12px] text-neutral-300">
-          {q.answer.engine === 'cache' ? 'from the class cache' : `via ${SITE_NAMES[q.target_site] || 'your AI'}`}
+        {/* Where the answer came from. Worth stating plainly: a cache hit opens no tab
+            at all, which otherwise reads as "something answered this behind my back". */}
+        <span className="ml-auto text-[12px] text-neutral-400">
+          {q.answer.engine === 'cache'
+            ? 'already answered by your class — no tab needed'
+            : `answered in ${SITE_NAMES[q.target_site] || 'your AI'}`}
         </span>
       </div>
     </div>
@@ -236,7 +243,10 @@ function Explain({ q }) {
 
   return (
     <section className="mt-10 border-l-2 border-neutral-900 pl-6">
-      <Eyebrow className="mb-3">In plain words</Eyebrow>
+      {/* The one thing Prism's own model writes. Answers never come from here — but
+          re-reading an answer you already have isn't worth a browser tab and one of your
+          free messages, so this one is on us. */}
+      <Eyebrow className="mb-3">In plain words · written by Prism</Eyebrow>
       {state === 'loading' && <Pulse>Writing the beginner's version…</Pulse>}
       {state === 'error' && <p className="text-sm text-neutral-500">Couldn't write it. Try again in a moment.</p>}
       {state === 'ready' && <Markdown content={md} answerId={q.answer.id} />}

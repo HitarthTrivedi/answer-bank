@@ -15,15 +15,17 @@ Students upload a question bank (PDF / DOCX / image / pasted text). Prism answer
 25–40 — routing each question to the AI best suited to its type, then exports the lot as a
 polished DOCX with working, code, plots and diagrams.
 
-**Our AI routes; their AI answers.** The server calls exactly one model — the router,
-running on OpenRouter's free tier — and it never writes an answer. It reads a question,
-decides what kind of answer it needs, and picks which of the student's browser AIs should
-write it. One short JSON reply per question, so it stays cheap at any volume. Every actual answer comes from the
-student's own ChatGPT / Claude / Gemini session, driven by the Chrome extension.
+**Our AI routes; their AI answers.** The server's own model, on OpenRouter's free tier,
+does exactly two things and neither is answering a question. It **sorts a bank** — one JSON
+reply for the whole thing, giving each question a type and the assistant best placed to
+write it — and it writes the **"explain it simply"** version of an answer already on
+screen. Every actual answer comes from the student's own ChatGPT / Claude / Gemini
+session, driven by the Chrome extension.
 
-**Questions run three at a time across three different assistants.** This is what stops
-any one account hitting its free message cap — 30 questions become 10 each — and it cuts
-wall-clock time by roughly the batch size.
+**Questions run three at a time, wherever they belong.** A batch is the next three
+questions, each in its own fresh chat on the site the router chose — all three on Gemini
+if all three are diagrams. Nothing reassigns a question to even out the load; spread falls
+out of the routing itself, because different question types belong on different sites.
 
 **Business model:** answering is free, the DOCX download costs ₹20 (1 credit). First bank
 free. See §6.
@@ -55,8 +57,8 @@ Without the extension nothing breaks — every question just shows a ready-made 
 paste into any AI tab by hand.
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q   # 21 tests
-cd extension && npm install && npm test              # 10 tests
+cd backend && .venv/bin/python -m pytest tests/ -q   # 46 tests
+cd extension && npm install && npm test              # 15 tests
 ```
 
 ---
@@ -66,12 +68,13 @@ cd extension && npm install && npm test              # 10 tests
 ```
 upload → extract questions (regex) → student reviews/edits → queue:
   ┌ per question ┐
-  │ class cache? ─ hit → instant answer (free; outranks everything below)
-  │ ROUTER AI    ─ the only model we call. qtype + which assistant answers. Never answers.
+  │ class cache? ─ hit → instant answer, no tab opens (free; outranks everything below)
+  │ ROUTER AI    ─ sorts the WHOLE BANK in one call. qtype + which assistant. Never answers.
   │ else         ─ park the crafted prompt as `assist_waiting`
   └ per batch of 3 ┘
-    GET /extension/batch leases 3 questions on 3 DISTINCT assistants
-      → extension opens 3 tabs, each a FRESH chat, sends all three
+    GET /extension/batch leases the next 3, each on the site the router picked
+      → extension opens 3 tabs, each a FRESH chat (one tab per question, even
+        when two questions land on the same site), sends all three
       → waits for all three (~3 min), scrapes each, POSTs to /assist
       → next 3
     (or the student pastes any of them by hand — same prompt, same result)
@@ -101,7 +104,8 @@ the whole run from its own page. Installing the extension is the entire setup.
   which are real questions vs. steps inside an answer. A student review step follows, so a
   miss costs one edit rather than a wrong answer.
 - **Router AI** (`services/router_agent.py`, model in `models.json`) → question type +
-  which assistant answers it. Falls back to keywords with no key. The only model call.
+  which assistant answers it, for a whole bank in one call. Falls back to keywords with
+  no key.
 - Sequential worker; state in DB, so a restart resumes exactly where it stopped
 - SymPy re-computation of numericals → verified ✓ / check-working ⚠ badge
 - Class cache: identical questions answered once, served to every classmate
@@ -208,8 +212,46 @@ there are, never for what they say. Supporting changes:
   retries once in a fresh chat from the extracted text plus any anchored figure, so a
   miss costs one extra chat rather than the question.
 
-### Test coverage — 59 total
-`backend` (44): auth + refresh rotation, upload magic bytes, extraction, SymPy
+### Added in the routing pass
+
+**Our own model now does exactly two things, and answering is not one of them.**
+
+- **"Explain it simply" is written by Prism** (`services/explainer.py`), not by the
+  student's browser AI. It used to hand back a prompt to paste. That was the wrong trade:
+  an explanation is a re-read of an answer already on screen, clicked on a whim and often
+  abandoned two lines in, and spending one of the student's free ChatGPT messages on it
+  costs more than the feature is worth. Answers still never come from here — the mock
+  provider deliberately has no "answer a question" branch.
+- **A whole bank is routed in one call** (`router_agent.classify_many`, chunked at 25).
+  It used to be one call per question. A free tier's daily allowance is measured in tens,
+  so a 28-question bank spent its entire routing budget on itself and degraded to keywords
+  without saying so. Now it's one call for the bank, and the router sees the bank as a set.
+- **The forced spread across assistants is gone.** `_assign` used to guarantee that a
+  batch of three landed on three *different* sites, which silently overrode the router's
+  decision on two questions out of every three. A batch is now the next three questions,
+  each on the site the router chose — all three on Gemini if all three are diagrams. Spread
+  falls out of the routing itself. The only override left is an assistant the student isn't
+  signed into.
+- **One tab per question, even on the same site.** `background.js` reused the first open
+  tab for a site; with three same-site questions in flight they overwrote each other's
+  prompt. Tabs are claimed for the duration of a question and released in a `finally`.
+- **The keyword fallback was widened** with phrase patterns, because it is what runs
+  whenever the daily allowance is spent — "write a Python program" doesn't contain the
+  substring "write a program", so it was being routed as theory.
+- **Figure questions get their own row in the deck.** `services/paper.py::is_visual`
+  decides; the rail renders two groups, "Diagrams & figures" and "Theory". A misread
+  diagram becomes a confident wrong answer rather than an obvious blank, so those are the
+  ones worth a second look and they shouldn't be scattered through thirty theory questions.
+- **Starting a run says when it can't.** If the extension isn't loaded, pressing "Answer
+  all N" used to park the questions and do nothing visible. It now says so.
+- **A cache hit says so on the answer.** "Already answered by your class — no tab needed",
+  rather than looking like something answered it behind your back.
+
+`services/paper.py` is new and owns the two predicates that were duplicated across routers:
+`is_visual` (how the deck groups) and `answered_from_document` (how the extension answers).
+
+### Test coverage — 61 total
+`backend` (46): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
 question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →

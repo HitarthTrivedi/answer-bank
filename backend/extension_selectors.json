@@ -1,9 +1,9 @@
 {
-  "_comment": "DOM contract between the Chrome extension and each AI site, plus what each site is good at (the router reads `strengths` to decide who answers what). Served live at GET /api/extension/config, so when a site renames a button you edit THIS FILE and every installed extension picks it up on its next run \u2014 no re-install. Selector lists are tried in order, first match wins. VERIFY THESE against the live sites before launch.",
+  "_comment": "DOM contract between the Chrome extension and each AI site, plus what each site is good at (the router reads `strengths` to decide who answers what). Served live at GET /api/extension/config, so when a site renames a button you edit THIS FILE and every installed extension picks it up on its next run — no re-install. Selector lists are tried in order, first match wins. VERIFY THESE against the live sites before launch.",
   "version": 1,
   "default_site": "chatgpt",
   "routing": {
-    "_comment": "fallback map used when the routing AI is unavailable. When it IS available it picks per question, and the batch scheduler still spreads a batch across distinct sites so no one AI hits its free message cap.",
+    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. Nothing reassigns a question afterwards for the sake of an even spread: three diagram questions all go to whoever draws diagrams best, in three separate tabs. Spread falls out of the routing itself, because different question types belong on different sites.",
     "numerical": "chatgpt",
     "code": "chatgpt",
     "graph": "gemini",

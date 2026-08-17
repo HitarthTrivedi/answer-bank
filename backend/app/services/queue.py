@@ -115,14 +115,31 @@ async def _process_next() -> bool:
         db.close()
 
 
+async def _sort_the_bank(db, project: Project) -> None:
+    """Route every unrouted question in this bank in one go.
+
+    One call per question would be 28 calls for a 28-question bank, and a free tier's
+    daily allowance is measured in tens — the bank would run out of routing before it ran
+    out of questions. Sorting the whole bank at once is the same judgement for a fraction
+    of the quota, and it lets the router see the bank as a set: ten diagram questions can
+    all be sent to whoever draws diagrams best.
+    """
+    todo = [x for x in project.questions
+            if not x.qtype and x.status in ("pending", "answering")]
+    if not todo:
+        return
+    routes = await router_agent.classify_many([x.text for x in todo])
+    for x, r in zip(todo, routes):
+        x.qtype, x.route_reason, x.target_site = r["qtype"], r["reason"], r["site"]
+    db.commit()
+    log.info("sorted %d question(s) of %s", len(todo), project.id)
+
+
 async def _route_question(db, q: Question) -> None:
-    # 1. route: what kind of answer, and which browser AI should write it
+    # 1. route: what kind of answer, and which browser AI should write it. Done for the
+    #    whole bank at once the first time we reach it.
     if not q.qtype:
-        route = await router_agent.classify(q.text)
-        q.qtype = route["qtype"]
-        q.route_reason = route["reason"]
-        q.target_site = route["site"]
-        db.commit()
+        await _sort_the_bank(db, q.project)
 
     # 2. class cache — free, instant, and it outranks the browser: a question the class
     #    already answered shouldn't cost anyone another trip through ChatGPT.

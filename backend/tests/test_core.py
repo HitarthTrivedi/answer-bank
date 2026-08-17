@@ -145,11 +145,16 @@ def test_full_pipeline(client, tokens):
     assert by_idx[2]["qtype"] == "code"
     assert "```python" in by_idx[2]["answer"]["content_md"]
 
-    # explain-me hands back a prompt for the student's own AI, never a server answer
+    # explain-me is the ONE thing our own model writes — it must not cost the student a
+    # browser tab, and it must not have touched the answer itself
     r = client.post(f"/api/questions/{by_idx[0]['id']}/explain", headers=_auth(tokens))
     assert r.status_code == 200
-    assert r.json()["explain_md"] == ""
-    assert "<answer>" in r.json()["assist_prompt"]
+    assert len(r.json()["explain_md"]) > 40
+    assert r.json()["assist_prompt"] == ""
+
+    # and it's stored on the answer, so the second click is instant and free
+    again = client.post(f"/api/questions/{by_idx[0]['id']}/explain", headers=_auth(tokens))
+    assert again.json()["explain_md"] == r.json()["explain_md"]
 
     # docx export
     r = client.get(f"/api/projects/{pid}/export", headers=_auth(tokens))

@@ -13,7 +13,8 @@ from ..config import DATA_DIR, get_settings
 from ..db import SessionLocal, get_db
 from ..models import Answer, AnswerAsset, Figure, Project, Question, User
 from ..security import audit, client_ip, current_user
-from ..services import billing, cache, diagrams, export, extractor, ingest, solver, verify
+from ..services import (billing, cache, diagrams, explainer, export, extractor, ingest,
+                        paper, solver, verify)
 from ..services.queue import wake
 
 log = logging.getLogger("prism.projects")
@@ -54,6 +55,9 @@ def _question_dict(q: Question) -> dict:
         "figures": [{"id": f.id, "url": f"/api/figures/{f.id}"} for f in q.figures],
         # flags a question that points at something the AI cannot see
         "needs_figure": extractor.mentions_a_figure(q.text) and not q.figures,
+        # is the substance of this question a diagram/graph/table/image? The deck groups
+        # on this, because those are the ones worth a second look
+        "visual": paper.is_visual(q),
         # still offered while a tab holds the lease, so a student can always paste by hand
         "assist_prompt": q.assist_prompt if q.status in ("assist_waiting", "assist_running") else "",
         "answer": None,
@@ -350,14 +354,29 @@ def submit_assist(question_id: str, body: AssistSubmit,
 
 
 @router.post("/questions/{question_id}/explain")
-def explain_me(question_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Explains go the same way answers do — through the student's own AI. Cached on the
-    answer once produced, so a second click is instant and free."""
+async def explain_me(question_id: str, user: User = Depends(current_user),
+                     db: Session = Depends(get_db)):
+    """The one thing Prism's own AI writes.
+
+    Answers always come from the student's browser AI. An explanation doesn't: it's a
+    short re-read of an answer already on screen, clicked on a whim, and routing that
+    through a browser tab would spend one of the student's free messages on something
+    worth far less. Stored on the answer, so a second click is instant and free.
+
+    With no key configured it degrades to a paste-it-yourself prompt, like everything else.
+    """
     q = _own_question(db, user, question_id)
     if q.answer is None:
         raise HTTPException(409, "Answer this question first")
     if q.answer.explain_md:
         return {"explain_md": q.answer.explain_md, "assist_prompt": ""}
+
+    text = await explainer.explain(q.text, q.answer.content_md)
+    if text:
+        q.answer.explain_md = text
+        db.commit()
+        return {"explain_md": text, "assist_prompt": ""}
+
     return {"explain_md": "",
             "assist_prompt": solver.build_explain_assist_prompt(q.text, q.answer.content_md)}
 

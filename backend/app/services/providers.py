@@ -145,10 +145,33 @@ def extract_json(text: str):
 
 
 def _mock_routing_response(messages: list[dict]) -> str:
-    """Deterministic routing so dev/tests don't need a key. Mirrors the keyword fallback
-    so mock behaviour and key-less behaviour agree."""
+    """Deterministic canned replies so dev/tests don't need a key. Mirrors the keyword
+    fallback so mock behaviour and key-less behaviour agree.
+
+    Only the two things Prism's own model is ever asked to do — route a question and
+    re-explain an answer. There is deliberately no mock for *answering*: nothing in this
+    codebase may answer a question server-side, mock or not.
+    """
     from .router_agent import heuristic_classify
 
-    question = messages[-1]["content"] if messages else ""
-    guess = heuristic_classify(question)
+    system = messages[0]["content"] if messages else ""
+    if "TASK: explain_newbie" in system:
+        return ("Think of it like this: the answer above is doing one job, and it does it "
+                "in small steps.\n\n1. Start from what you already know.\n2. Apply the rule "
+                "the answer names.\n3. Check the result makes sense.\n\n"
+                "**How to remember it:** name the rule, then the step it saves you.")
+
+    body = messages[-1]["content"] if messages else ""
+
+    if "TASK: route_questions" in system:
+        # a numbered listing in, one route per line out — same shape the real router returns
+        routes = []
+        for line in body.split("\n"):
+            head, _, text = line.partition(". ")
+            if head.strip().isdigit():
+                routes.append({"id": int(head), "reason": "mock router",
+                               **{"qtype": heuristic_classify(text)["qtype"]}})
+        return json.dumps({"routes": routes})
+
+    guess = heuristic_classify(body)
     return json.dumps({"qtype": guess["qtype"], "reason": "mock router"})

@@ -4,13 +4,16 @@ There is no pairing flow. The extension runs a content script on the Prism web a
 own origin, so it reads the session the student is already signed in with — same origin,
 same tokens, nothing to type. Installing the extension is the entire setup.
 
-Work is handed out in **batches spread across distinct AI sites**: three questions, three
-tabs, three different assistants, all answering at the same time. That is what keeps a
-30-question bank from exhausting anyone's free message cap — it becomes 10 each rather
-than 30 on one — and it cuts wall-clock time by roughly the batch size.
+Work is handed out three questions at a time, each in its own fresh chat, all answering
+at once. **Which** assistant each one goes to is the router's decision and nothing else's:
+a batch of three diagram questions all go to whoever reads diagrams best, even if that
+means three tabs on the same site. An earlier version forced every batch across three
+distinct assistants to spread the load; that traded answer quality for a rate limit
+nobody had hit yet, which is the wrong way round. Load-spreading now falls out naturally,
+because different question types route to different sites.
 
-Each question still gets its own brand-new chat. Parallel across assistants is not the
-same as batched into one thread, which is the failure this product exists to fix.
+Parallel is not the same as batched into one thread — every question still gets its own
+brand-new chat, which is the failure this product exists to fix.
 """
 import base64
 import io
@@ -26,7 +29,7 @@ from ..config import get_extension_config
 from ..db import get_db
 from ..models import Project, Question, User
 from ..security import current_user
-from ..services import extractor, solver
+from ..services import paper, solver
 from ..services.queue import expire_leases
 
 log = logging.getLogger("prism.extension")
@@ -125,51 +128,6 @@ def projects_needing_work(user: User = Depends(current_user), db: Session = Depe
     return out
 
 
-# Formats where the file itself can hold something our text extraction cannot: figures,
-# graphs, circuits, scanned pages, spreadsheet layouts. A .txt has none of that, so
-# attaching it would buy an upload's worth of latency and nothing else.
-_VISUAL_SOURCES = {".pdf", ".docx", ".png", ".jpg", ".jpeg"}
-
-# Below this, a question's extracted text is too thin to quote as a locator — usually a
-# stub or a placeholder for a row that was pure image.
-_QUOTABLE_CHARS = 25
-
-
-def _number_is_unique(q: Question) -> bool:
-    """Does this question's number point at exactly one question in the paper?"""
-    if q.source_number is None:
-        return False
-    return sum(1 for other in q.project.questions
-               if other.source_number == q.source_number) == 1
-
-
-def _wants_the_document(q: Question) -> bool:
-    """Should this question be answered against the uploaded paper itself?
-
-    Yes, for every question in a paper we still have — not only the ones that name a
-    figure. The document is simply a better copy of the question than our extraction is:
-    it carries the figures, the tables, the sub-parts and the original wording, and the
-    model reading it decides which picture belongs to which question far better than any
-    anchoring heuristic could. Extraction is then only responsible for *how many*
-    questions there are and what each is called, never for their content.
-
-    The exceptions are the cases where the file adds nothing (pasted text, .txt) or where
-    we could not tell the AI which question we mean.
-    """
-    path = Path(q.project.source_path or "")
-    if not q.project.source_path or not path.exists():
-        return False              # pasted text — there is no paper to hand over
-    if path.suffix.lower() not in _VISUAL_SOURCES:
-        return False              # plain text: the extraction already is the document
-    if q.source_number is not None:
-        return True               # locatable by its own number in the file
-    # no number: we can still quote the question — unless it was a pure-image row, in
-    # which case only an attached figure can carry it.
-    if q.text.startswith(extractor.FIGURE_ONLY[:24]):
-        return False
-    return len(q.text.strip()) >= _QUOTABLE_CHARS
-
-
 def _figure_payload(q: Question) -> list[dict]:
     """The question's figures, downscaled, base64'd, ready for the extension to paste
     into the chat. We never look at what they contain — the student's own AI reads them,
@@ -201,33 +159,27 @@ def _figure_payload(q: Question) -> list[dict]:
 
 
 def _assign(questions: list[Question], sites: list[str], size: int) -> list[tuple[Question, str]]:
-    """Pick up to `size` questions, each on a *different* site.
+    """Take the next `size` questions in order, each on the site the router chose for it.
 
-    Pass 1 honours the router's per-question choice. Pass 2 fills any slot the first pass
-    left empty, ignoring preference — an even spread across assistants matters more than
-    a perfect match, because an exhausted free tier answers nothing at all.
+    The router's choice is the whole point — it read the question and decided who answers
+    it best — so nothing here overrides it for the sake of an even spread. Three questions
+    that all belong on Gemini all go to Gemini, in three separate tabs.
+
+    The only substitution is when the routed site isn't usable: the student isn't signed
+    into it, or the config no longer lists it. Then the question falls back to the type's
+    default and finally to whatever is available, because an answer from the second-best
+    assistant beats no answer at all.
     """
+    fallback = get_extension_config().get("routing", {})
     chosen: list[tuple[Question, str]] = []
-    used: set[str] = set()
-    taken: set[str] = set()
 
     for q in questions:
         if len(chosen) >= size:
             break
-        site = q.target_site
-        if site in sites and site not in used:
-            chosen.append((q, site))
-            used.add(site)
-            taken.add(q.id)
-
-    spare = [s for s in sites if s not in used]
-    for q in questions:
-        if len(chosen) >= size or not spare:
-            break
-        if q.id in taken:
-            continue
-        chosen.append((q, spare.pop(0)))
-        taken.add(q.id)
+        for site in (q.target_site, fallback.get(q.qtype or "theory"), sites[0]):
+            if site in sites:
+                chosen.append((q, site))
+                break
 
     return chosen
 
@@ -248,8 +200,8 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
         return {"batch": [], "done": False, "waiting": _waiting(db, user, project_id).count(),
                 "error": "no_sites_available"}
 
-    # a small pool so pass 2 has room to spread, not just the first `size`
-    pool = _waiting(db, user, project_id).limit(size * 4).all()
+    # the next `size` waiting questions, in the order they appear in the paper
+    pool = _waiting(db, user, project_id).limit(size).all()
     if not pool:
         return {"batch": [], "done": True, "waiting": 0,
                 "remaining_elsewhere": _waiting(db, user).count()}
@@ -269,15 +221,18 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
             "marks": q.marks,
             "prompt": q.assist_prompt,
             "site": site,
+            # where the router wanted it, before availability had a say — the two differ
+            # only when the student isn't signed into the routed assistant
+            "route_site": q.target_site,
             "route_reason": q.route_reason,
             "figures": _figure_payload(q),
         })
-        if _wants_the_document(q):
+        if paper.answered_from_document(q):
             # A number only identifies a question if the paper uses it once. Spreadsheet
             # exports and multi-section papers restart their numbering, and "answer
             # question 11" against two different question 11s is a coin toss — so when the
             # number is ambiguous we drop it and let the prompt quote the question instead.
-            number = q.source_number if _number_is_unique(q) else None
+            number = q.source_number if paper.number_is_unique(q) else None
             batch[-1]["document"] = {
                 "url": f"/api/extension/document/{q.project_id}",
                 "filename": q.project.source_filename or "question-paper.pdf",

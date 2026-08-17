@@ -1,6 +1,6 @@
 {
-  "_comment": "The ONE model Prism calls. It routes, it never answers \u2014 it reads a question and decides which of the student's browser AIs is best placed to answer it.",
-  "_why_openrouter_free": "`openrouter/free` is OpenRouter's own Free Models Router: one stable ID that dispatches to whatever free model is currently up. That matters because individual :free IDs rot fast \u2014 every hand-written ID in the previous version of this file was already dead. Using the router means the list is maintained by OpenRouter instead of by us.",
+  "_comment": "Prism's own models. They ROUTE and they EXPLAIN — they never answer a question. Answering runs on the student's own ChatGPT/Claude/Gemini, which is the whole point: better models than any free API tier, and no inference cost to us.",
+  "_why_openrouter_free": "`openrouter/free` is OpenRouter's own Free Models Router: one stable ID that dispatches to whatever free model is currently up. That matters because individual :free IDs rot fast — every hand-written ID in the previous version of this file was already dead. Using the router means the list is maintained by OpenRouter instead of by us.",
   "router": {
     "provider": "openrouter",
     "model": "openrouter/free",
@@ -10,7 +10,7 @@
     }
   },
   "_max_tokens_note": "1500, not a couple of hundred: openrouter/free frequently dispatches to a REASONING model, and reasoning tokens are billed against the completion budget (observed 240-370 for a one-line classification, and far more on some models). Too low and the model spends the whole allowance thinking, then returns empty content and the router falls through to the next chain entry for nothing. Free models cost nothing either way, so there is no reason to be tight here.",
-  "_router_fallbacks_note": "Tried in order if the primary fails. All confirmed present on the free tier \u2014 re-check with GET /api/v1/models if routing starts failing. With no keys at all, routing falls back to keywords and the product still works.",
+  "_router_fallbacks_note": "Tried in order if the primary fails. All confirmed present on the free tier — re-check with GET /api/v1/models if routing starts failing. With no keys at all, routing falls back to keywords and the product still works.",
   "router_fallbacks": [
     {
       "provider": "openrouter",
@@ -55,5 +55,14 @@
       "max_tokens": 6000
     }
   },
-  "_extractor_note": "Splitting is ONE call per upload regardless of document size: the regex finds candidate boundaries, the model only says which are real questions. max_tokens is far higher than the router entry because openrouter/free often lands on a REASONING model, and judging 80+ candidates burns a lot of reasoning tokens before it emits the id list \u2014 starve it and you get empty content and a needless fall-through to the next model. Free either way."
+  "_extractor_note": "Splitting is ONE call per upload regardless of document size: the regex finds candidate boundaries, the model only says which are real questions. max_tokens is far higher than the router entry because openrouter/free often lands on a REASONING model, and judging 80+ candidates burns a lot of reasoning tokens before it emits the id list — starve it and you get empty content and a needless fall-through to the next model. Free either way.",
+  "explainer": {
+    "provider": "openrouter",
+    "model": "openrouter/free",
+    "json_mode": false,
+    "params": {
+      "max_tokens": 2000
+    }
+  },
+  "_explainer_note": "The one place our own model writes prose. An explanation is a short re-read of an answer the student already has, clicked on a whim and often abandoned two lines in — sending that through a browser tab would burn one of the student's free messages for something worth far less than that. Not JSON mode: this returns markdown. With no key it falls back to a paste-it-yourself prompt like everything else."
 }

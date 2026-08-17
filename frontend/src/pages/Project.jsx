@@ -135,7 +135,12 @@ export default function Project() {
       await api.put(`/projects/${id}/questions`, { questions: clean })
       await api.post(`/projects/${id}/start`)
       setDraft(null)
+      // Say so when the run can't start. This used to fail silently when the extension
+      // wasn't there yet — the bank started, no tabs opened, and nothing on screen
+      // explained why until you found the button on an individual question.
       if (isInstalled()) await startRun(id).catch((e) => setError(e.message))
+      else setError('Questions are ready, but the Chrome extension isn\'t loaded on this page — '
+                    + 'install it (or reload after installing) and your AI will start answering.')
       await load()
       goTo(0)
     } catch (e) {

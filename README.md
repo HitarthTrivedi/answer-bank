@@ -34,12 +34,12 @@ place. Nothing is stacked on one scrolling page.
 upload → split into questions → student reviews/edits → queue:
   ┌ per question ┐
   │ class cache? ─ hit → instant answer (free, outranks everything below)
-  │ ROUTER AI    ─ the one model we call. Picks the answer type
+  │ ROUTER AI    ─ sorts the whole bank in ONE call. Per question: the answer type
   │                (numerical | code | graph | diagram | theory) AND which of the
   │                student's browser AIs should write it. It never answers anything.
   └ per batch of 3 ┘
-    extension opens 3 tabs on 3 DIFFERENT assistants, each its own fresh chat,
-    waits for all three, collects the answers → next 3
+    extension opens 3 tabs — wherever the router sent them, same site or not —
+    each its own fresh chat, waits for all three, collects the answers → next 3
     (or the student pastes any prompt by hand — same prompt, same result)
   verify ─ numericals re-computed with SymPy → ✓ / ⚠ badge
   store  → dashboard renders (KaTeX, highlighted code, mermaid, real plots)
@@ -47,15 +47,17 @@ upload → split into questions → student reviews/edits → queue:
 ```
 
 **Key design decisions**
-- **Our AI routes; their AI answers.** The server calls exactly one model, and only to
-  classify a question and pick which assistant should handle it — one short JSON reply
-  per question, on `openrouter/free` — OpenRouter's own router across whatever free
-  models are currently up, so we never chase rotating `:free` IDs. The expensive part,
-  actually answering, is on the student's own ChatGPT/Claude/Gemini subscription. With
-  no key at all, routing falls back to keywords and everything still works.
-- **Three at a time, across three assistants.** A batch is always spread over distinct
-  AIs. 30 questions become 10 each rather than 30 on one account, so nobody's free
-  message cap runs out mid-run — and the bank finishes ~3× faster.
+- **Our AI routes; their AI answers.** The server's own model does exactly two things:
+  it sorts a question bank — one JSON reply for the *whole bank*, on `openrouter/free` —
+  and it writes the "explain it simply" version of an answer you already have. It never
+  answers a question. That is on the student's own ChatGPT/Claude/Gemini subscription,
+  which is a better model than any free API tier and costs us nothing. With no key at
+  all, routing falls back to keywords and everything still works.
+- **Three at a time, wherever they belong.** A batch is the next three questions, each
+  going to the assistant the router picked for it — all three to Gemini if all three are
+  diagrams, in three separate tabs. Nothing reassigns a question to even out the load;
+  spread falls out of the routing itself, since different question types go to different
+  sites. Every question still gets its own brand-new chat.
 - **One prompt contract.** The extension and a student pasting by hand use the *same*
   crafted prompt, so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
@@ -140,7 +142,7 @@ to paste into any AI tab by hand.
 cd backend && .venv/bin/python -m pytest tests/ -q
 ```
 
-44 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
+46 tests: auth flow + refresh rotation, upload magic-byte validation, extraction,
 SymPy verification (incl. injection payloads), class cache, prompt-injection envelope,
 the full pipeline with a stand-in for the browser (`tests/helpers.py`), proof that no
 question is ever answered server-side, the export paywall (free bank → 402 → paid unlock
