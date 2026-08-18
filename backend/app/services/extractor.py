@@ -39,7 +39,14 @@ _NUM_ALONE = re.compile(r"^\s*(\d{1,3})\s*$")
 # "...Encapsulation.2.Explain Software Engineering..." — some PDFs extract with no line
 # breaks at all, so nothing is at the start of a line and every anchored pattern misses.
 # Last resort only: scanning mid-line for numbers is how you accidentally split on "1.5".
-_INLINE_NUM = re.compile(r"(?<![\d.])(\d{1,3})\.(?=[A-Z\"'“‘])")
+#
+# A preceding period is ALLOWED, deliberately: in a zero-newline PDF nearly every real
+# boundary is exactly `...computing.4.What` — the previous question's full stop touching
+# the next number. Refusing that shape once fused a 13-question assignment into one
+# giant question. A preceding digit is still refused ("1.5" must not split), and the
+# decimals that slip past ("Web 2.03.Explain" matching "03") are handled by the
+# sequence filter: only numbers that continue the count are believed.
+_INLINE_NUM = re.compile(r"(?<!\d)(\d{1,3})\.(?=[A-Z\"'“‘])")
 _MARKS = re.compile(r"[\(\[]\s*(\d{1,3})\s*(?:marks?|M)\s*[\)\]]|\b(\d{1,3})\s*marks?\b", re.IGNORECASE)
 
 _MARKER_CONFIDENCE = 3     # fewer explicit markers than this and they're incidental
@@ -92,12 +99,63 @@ def _candidates(raw: str) -> list[dict]:
         # as one long run looks like. Only take the mid-line scan if it genuinely finds
         # MORE than the anchored pass did — otherwise a perfectly good two-question bank
         # gets its candidates thrown away and the upload reports "no questions detected".
-        inline = [{"offset": m.start(), "kind": "inline", "num": int(m.group(1)),
-                   "opening": raw[m.end():m.end() + _PREVIEW_CHARS].strip()}
-                  for m in _INLINE_NUM.finditer(raw)]
+        inline = _sequence_only(_inline_candidates(raw))
         if len(inline) > len(out):
             out = inline
     return out[:_MAX_CANDIDATES]
+
+
+def _inline_candidates(raw: str) -> list[dict]:
+    out = []
+    for m in _INLINE_NUM.finditer(raw):
+        num, start = m.group(1), m.start(1)
+        # "Web 2.03.Explain": the regex grabs "03", but the 0 is the tail of "2.0" and
+        # belongs to the PREVIOUS question. Shift past the leading zeros so question 2
+        # keeps its "2.0" and this candidate is plain "3."
+        stripped = num.lstrip("0")
+        if not stripped:
+            continue  # "0." alone is never a question number
+        start += len(num) - len(stripped)
+        out.append({"offset": start, "kind": "inline", "num": int(stripped),
+                    "opening": raw[m.end():m.end() + _PREVIEW_CHARS].strip()})
+    return out
+
+
+def _sequence_only(cands: list[dict]) -> list[dict]:
+    """Keep only inline numbers that continue the count.
+
+    Mid-line scanning finds question numbers and also every "step 4." and stray decimal
+    in the text. Real numbering counts 1, 2, 3…; the impostors don't. A candidate is
+    believed if it continues the count — outright, as a fresh 1 (multi-section papers
+    restart), or by its SUFFIX: run-together headings glue digits onto question numbers
+    ("UNIT 22.Explain" is unit 2 + question 2), and the tail that fits the count is the
+    question number while the head belongs to the text before it.
+
+    The first number is ambiguous on its own ("11." might be question 11, or unit 1 +
+    question 1), so both readings are tried and whichever explains more of the document
+    wins.
+    """
+    def chain(first: dict) -> list[dict]:
+        kept = [first]
+        for c in cands[1:]:
+            want = kept[-1]["num"] + 1
+            if c["num"] == want or c["num"] == 1:
+                kept.append(c)
+                continue
+            tail, ws = str(c["num"]), str(want)
+            if len(tail) > len(ws) and tail.endswith(ws):
+                shift = len(tail) - len(ws)
+                kept.append({**c, "num": want, "offset": c["offset"] + shift})
+        return kept
+
+    if not cands:
+        return []
+    readings = [chain(cands[0])]
+    head = str(cands[0]["num"])
+    if len(head) > 1 and head.endswith("1"):     # "11." could be unit 1 + question 1
+        readings.append(chain({**cands[0], "num": 1,
+                               "offset": cands[0]["offset"] + len(head) - 1}))
+    return max(readings, key=len)
 
 
 def _build(raw: str, kept: list[dict]) -> list[dict]:

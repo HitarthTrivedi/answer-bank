@@ -324,6 +324,42 @@ def test_recovery_leaves_a_cleanly_numbered_bank_alone():
     assert extractor._recover_run_on_rows(gapped) == gapped
 
 
+ZERO_NEWLINE_PDF = (
+    'Unit-1 Assignment1.Write the Short note on “ Roots of Cloud computing”.'
+    '2.Explain SOA and Web 2.03.Explain Distributed computing and Grid computing.'
+    '4.What is H/W virtualization, Explain with diagram.5.Draw the layered architecture.'
+)
+
+
+def test_a_pdf_with_no_newlines_at_all_still_splits():
+    """A real assignment PDF whose text layer is one 725-character line. Every boundary
+    is `….4.What` — the previous question's full stop touching the next number — which
+    the inline pattern used to refuse (guarding against "1.5"), so thirteen questions
+    fused into one. The guard now is the SEQUENCE: only numbers that continue the count
+    are believed, which rejects decimals better than the lookbehind ever did."""
+    qs = extractor.heuristic_extract(ZERO_NEWLINE_PDF)
+    by_number = {q["number"]: q["text"] for q in qs}
+
+    assert sorted(by_number) == [1, 2, 3, 4, 5]
+    assert by_number[1].startswith("Write the Short note")
+    # "Web 2.03.Explain" is question 2 ending in "2.0" glued to question 3 —
+    # the 0 must stay with question 2, and "03" must be read as 3
+    assert by_number[2] == "Explain SOA and Web 2.0"
+    assert by_number[3].startswith("Explain Distributed computing")
+    assert by_number[4].startswith("What is H/W virtualization")
+
+
+def test_inline_numbers_that_break_the_count_are_not_boundaries():
+    """"…discussed in section 7. Also note…" must not become question 7 when the paper
+    is on question 2 — an out-of-sequence number is an impostor, not a boundary."""
+    text = ('1.Define caching in one line.2.Explain why we prefer LRU here, as covered in '
+            'Lecture 9.Also state the eviction rule and give one worked example of it.'
+            '3.Compare write-through and write-back caching policies.')
+    qs = extractor.heuristic_extract(text)
+    assert [q["number"] for q in qs] == [1, 2, 3]
+    assert "eviction rule" in qs[1]["text"], "question 2 must keep the sentence with the 9"
+
+
 def test_the_glued_shape_never_hijacks_a_normal_bank():
     """'1Define' is a guess that would misfire on ordinary prose, so it must only apply
     when no punctuated numbering exists anywhere in the document."""

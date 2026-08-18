@@ -37,7 +37,8 @@ export default function QuestionScreen({ q, index, total, project, mode, run, on
           </h1>
           <Figures figures={q.figures} />
           <hr className="my-9 border-neutral-200" />
-          <AnswerBody q={q} project={project} active={active} onChanged={onChanged} />
+          <AnswerBody q={q} project={project} active={active} running={!!run?.running}
+                      onChanged={onChanged} />
         </>
       )}
     </article>
@@ -130,7 +131,7 @@ function ReviewBody({ q, onPatch, onRemove, onAdd }) {
 
 // ------------------------------------------------------------------ answer mode
 
-function AnswerBody({ q, project, active, onChanged }) {
+function AnswerBody({ q, project, active, running, onChanged }) {
   if (q.status === 'answered' && q.answer) {
     return <Answered q={q} onChanged={onChanged} />
   }
@@ -143,7 +144,7 @@ function AnswerBody({ q, project, active, onChanged }) {
     )
   }
   if (q.status === 'assist_waiting' || q.status === 'assist_running') {
-    return <Waiting q={q} project={project} active={active} onChanged={onChanged} />
+    return <Waiting q={q} project={project} active={active} running={running} onChanged={onChanged} />
   }
   return <Pulse>{q.status === 'answering' ? 'Answering now…' : 'Waiting its turn'}</Pulse>
 }
@@ -270,7 +271,7 @@ function Explain({ q }) {
 
 // --------------------------------------------------- waiting on the student's own AI
 
-function Waiting({ q, project, active, onChanged }) {
+function Waiting({ q, project, active, running, onChanged }) {
   const [manual, setManual] = useState(false)
   const [paste, setPaste] = useState('')
   const [busy, setBusy] = useState(false)
@@ -283,6 +284,18 @@ function Waiting({ q, project, active, onChanged }) {
           ? `Reading your paper in ${active.site} to answer this one`
           : `${active.site} is writing this answer`}
       </Pulse>
+    )
+  }
+
+  // The run is on and this question is simply not in the current batch of three. It
+  // used to show the start button here, which read as "nothing is happening — click
+  // me", so people clicked it on every screen while the run was already working.
+  if (running && !manual) {
+    return (
+      <div className="space-y-4">
+        <Pulse>In the queue — your AIs are working through the bank three at a time</Pulse>
+        <Text onClick={() => setManual(true)}>can't wait? paste this one in yourself</Text>
+      </div>
     )
   }
 
