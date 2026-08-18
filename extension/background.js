@@ -280,7 +280,14 @@ async function runLoop() {
       throw new Error("You're not signed in to ChatGPT, Claude or Gemini in this browser. " +
                       'Sign in to any one of them and press Start again.')
     }
-    if (res.done || !res.batch.length) { setStatus('finished', 'All questions answered'); break }
+    if (res.done) { setStatus('finished', 'All questions answered'); break }
+    if (!res.batch.length) {
+      // no work YET — the server is still sorting the bank through its routing model,
+      // which takes ~20-30s. Ending here was the race that made "Answer all" look dead.
+      setStatus('running', 'Sorting your questions — picking the right AI for each…')
+      await sleep(2500)
+      continue
+    }
 
     const batch = res.batch
     state.total = batch[0].total

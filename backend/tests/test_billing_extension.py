@@ -364,6 +364,40 @@ def test_the_review_save_keeps_figures_and_the_number_in_the_paper(client, auth)
     assert figure_q["id"] not in [q["id"] for q in trimmed["questions"]]
 
 
+def test_no_work_yet_is_not_the_same_as_no_work(client, auth):
+    """The race that made "Answer all" look dead: the extension asks for a batch the
+    second the button is pressed, routing takes ~20-30s through the model, and an empty
+    pool answered done=True ended the run before a single question existed to answer.
+    While anything is still pending/answering, the batch must say "not done, routing"."""
+    r = client.post("/api/projects", data={"title": "Race Bank",
+                    "text": "1. Explain the raft consensus election timeout. (5 marks)\n2. Explain quorum reads in distributed stores. (5 marks)\n"}, headers=auth)
+    pid = r.json()["id"]
+    wait_for(client, auth, pid, lambda p: p["status"] == "review")
+
+    # freeze the worker's view: questions exist and are pending, none routed yet
+    from app.db import SessionLocal
+    from app.models import Question
+    client.post(f"/api/projects/{pid}/start", headers=auth)
+    db = SessionLocal()
+    try:
+        # force the pre-routing state even if the worker already got to them
+        db.query(Question).filter_by(project_id=pid).update(
+            {"status": "pending", "qtype": "", "target_site": ""})
+        db.commit()
+    finally:
+        db.close()
+
+    res = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()
+    assert res["batch"] == []
+    assert res["done"] is False, "an unrouted bank is not a finished bank"
+    assert res["routing"] == 2
+
+    # and once the worker finishes, work flows as normal
+    wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
+    final = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()
+    assert final["batch"], final
+
+
 def test_a_cant_answer_reply_is_never_accepted_as_an_answer(client, auth):
     """The incident this guards against: a document upload failed, the AI replied "No file
     appears to be attached to this chat", and that sentence was accepted, stored, CACHED,

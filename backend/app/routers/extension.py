@@ -236,6 +236,18 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
     # the next `size` waiting questions, in the order they appear in the paper
     pool = _waiting(db, user, project_id).limit(size).all()
     if not pool:
+        # "No work YET" must never read as "no work". The extension starts the moment
+        # the student presses the button, but routing a bank through the model takes
+        # ~20-30 seconds — and an empty pool answered with done=True made the extension
+        # declare victory and stop before a single question existed to answer.
+        routing = (db.query(Question)
+                   .join(Project, Question.project_id == Project.id)
+                   .filter(Project.user_id == user.id,
+                           Question.status.in_(("pending", "answering")),
+                           *([Project.id == project_id] if project_id else []))
+                   .count())
+        if routing:
+            return {"batch": [], "done": False, "waiting": 0, "routing": routing}
         return {"batch": [], "done": True, "waiting": 0,
                 "remaining_elsewhere": _waiting(db, user).count()}
 
@@ -337,6 +349,7 @@ def next_work(project_id: str | None = None, user: User = Depends(current_user),
     one, so it can never strand the rest of a batch."""
     result = _lease(db, user, project_id, "", 1)
     if not result["batch"]:
-        return {"done": True, "remaining_elsewhere": result.get("remaining_elsewhere", 0)}
+        return {"done": result.get("done", True), "routing": result.get("routing", 0),
+                "remaining_elsewhere": result.get("remaining_elsewhere", 0)}
     item = result["batch"][0]
     return {"done": False, "preferred_site": item["site"], "waiting": result["waiting"], **item}

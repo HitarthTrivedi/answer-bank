@@ -40,11 +40,19 @@ def answer_via_extension(client, auth, project_id, limit=100) -> int:
     return answered
 
 
-def wait_for(client, auth, project_id, predicate, tries=60):
-    """Poll a project until `predicate(project_dict)` holds. Returns the last snapshot."""
+def wait_for(client, auth, project_id, predicate, tries=80):
+    """Poll a project until `predicate(project_dict)` holds. Returns the last snapshot.
+
+    The sleep is load-bearing: without it all the tries burn off in milliseconds, before
+    the worker's idle tick (3s) ever fires — so any state that only the worker's periodic
+    pass repairs would silently never be waited for. 80 × 50ms comfortably spans a tick.
+    """
+    import time
+
     p = None
     for _ in range(tries):
         p = client.get(f"/api/projects/{project_id}", headers=auth).json()
         if predicate(p):
             break
+        time.sleep(0.05)
     return p
