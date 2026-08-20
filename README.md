@@ -14,8 +14,8 @@
 **Question bank in → exam-ready answer document out.**
 
 A prism takes one beam and splits it into a spectrum. This one takes a question bank and
-fans it across ChatGPT, Claude, Gemini and Kimi — each question going to whichever
-handles it best, three answering at a time.
+fans it across ChatGPT, Claude and Gemini — each question going to whichever handles
+it best, three answering at a time.
 
 Students upload a question bank from any source (PDF, DOCX, image, pasted text).
 Prism answers it **one question at a time** — because dumping 40 questions into a
@@ -57,13 +57,12 @@ upload → split into questions → student reviews/edits → queue:
   going to the assistant the router picked for it — all three to Gemini if all three are
   diagrams, in three separate tabs. Every question still gets its own brand-new chat.
 - **Routing is set from what each assistant is actually good at, and how much of it you
-  get free.** ChatGPT for numerical working and step-by-step math; Claude for long
-  structured answers and code; Gemini for anything visual; Kimi for the bulk and for
-  anything that needs the whole paper attached. Capacity is the half that decides a run:
-  free ChatGPT allows **three file uploads a day** and this uploads the paper once per
-  question, while Kimi's free tier caps neither messages nor uploads. So questions needing
-  the paper rotate across the sites with headroom and never touch ChatGPT's budget.
-  Checked August 2026; the evidence is recorded in `backend/extension_selectors.json`.
+  get free.** ChatGPT for numerical working, step-by-step math and graphs; Claude for
+  long structured answers and code; Gemini for diagrams and anything read out of a
+  figure. Capacity is the half that decides a run: free ChatGPT allows **three file
+  uploads a day**, and a figure question uploads the paper — so those go to Gemini, whose
+  free tier takes ten files per prompt. Checked August 2026; the evidence is recorded in
+  `backend/extension_selectors.json`.
 - **One prompt contract.** The extension and a student pasting by hand use the *same*
   crafted prompt, so an answer renders and exports identically however it arrived.
 - **No model-generated code is ever executed.** Graphs are declarative JSON specs
@@ -78,16 +77,18 @@ upload → split into questions → student reviews/edits → queue:
 - **Tables over pictures.** The house style pushes structured text wherever it works — a
   search trace is a step table, a comparison is a parameter table, a state space is an
   edge-cost table. It reads better, exports cleanly to DOCX, and costs nothing to produce.
-- **Answers come from the paper, not from our reading of it.** Whenever we still have the
-  uploaded file, the extension attaches it to a fresh chat and asks for one question —
-  "answer question 7", or, if the paper has no usable numbering, "answer the question that
-  begins …". The document already records which figure belongs to which question, and the
-  model reading it judges that far better than any anchoring heuristic could. So graphs,
-  circuits, tables, scans and spreadsheet layouts all work without us interpreting a single
-  pixel: no OCR, no vision API, no tesseract, nothing for us to get wrong. Extraction is
-  left responsible only for *how many* questions there are. If the AI can't find the
-  question in the paper it says so, and the extension retries once from the extracted text
-  plus any figure we anchored — a miss costs one extra chat, never the question.
+- **Figure questions get the paper itself.** When a question's meaning is in a picture —
+  a pure-image row, an anchored figure, a reference to a figure the paper actually has, a
+  photographed sheet — the extension attaches the *original file* to a fresh chat and asks
+  for that one question. The document already records which figure belongs to which
+  question, and the model reading it judges that far better than any anchoring heuristic
+  could: no OCR, no vision API, nothing for us to get wrong. Plain text questions go as
+  text, to whichever assistant the router chose — attaching the paper to everything
+  would pile the whole bank onto the one site with free upload headroom.
+- **Hands-off by design.** Press *Answer all* and walk away. The three questions in flight
+  each get their own small window, tiled on screen — a background tab is "hidden" to
+  Chrome and the AI sites stop streaming until it's looked at, which is why that can't be
+  three tabs in one window. The windows close themselves when the bank is done.
 
 ## Making money
 

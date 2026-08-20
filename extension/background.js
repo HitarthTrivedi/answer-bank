@@ -1,11 +1,10 @@
 // Orchestrator. Owns the run loop, the API session, and all the timers.
 //
-// Work arrives in batches spread across DIFFERENT assistants: three questions, three
-// tabs, three AIs answering simultaneously. Two reasons, and the second matters more:
-//
-//   1. wall-clock — three answers per ~3 minutes instead of one;
-//   2. rate limits — a 30-question bank becomes 10 each rather than 30 on one account,
-//      so nobody's free message cap runs out mid-run.
+// Work arrives three questions at a time, each on the assistant the server's router
+// chose for it — three small windows, three fresh chats, three answers in parallel.
+// Spread across assistants falls out of the routing (different question types go to
+// different sites), which is what keeps a 30-question bank from exhausting any one
+// account's free allowance.
 //
 // Every question still gets its own brand-new chat. Parallel across assistants is not
 // the same thing as batching questions into one thread, which is the exact failure this
@@ -99,48 +98,95 @@ function tell(tabId, msg) {
   })
 }
 
-/** Tabs currently answering a question. A batch can now put three questions on the SAME
- *  assistant — the router sends every diagram question to whoever reads diagrams best —
- *  and without this they would all grab the one open ChatGPT tab and overwrite each
- *  other's prompt. One question, one tab, always. */
-const claimed = new Set()
+// ---------------------------------------------------------------- slot windows
+//
+// Each of the three questions in flight gets its OWN small window, tiled on screen.
+//
+// This is not decoration. A tab opened in the background is "hidden" to Chrome, and the
+// AI sites stop streaming and rendering their reply until it is looked at — so answers
+// only ever arrived for the tab the student happened to click on. One tab per window,
+// each window on screen and unobscured, means every slot is visible at once, the run
+// completes with nobody touching the laptop, and the student can watch it work.
+//
+// The app window is moved to the left so it never covers the slots: on macOS and Windows
+// a covered window counts as hidden too.
 
-async function findFreeTab(site) {
-  for (const host of site.match) {
-    const tabs = await chrome.tabs.query({ url: `*://${host}/*` })
-    const free = tabs.find((t) => !claimed.has(t.id))
-    if (free) return free
-  }
-  return null
-}
+const SLOT_COUNT = 3
+const slots = []          // slot index -> { windowId, tabId }
+let appWindowId = null    // the Prism page's window, parked on the left
 
-/** A tab on `site`, parked on a brand-new empty chat, with the driver alive in it.
- *  Claimed for the caller until it calls `release`. */
-async function freshChatTab(site) {
-  let tab = await findFreeTab(site)
-  if (!tab) tab = await chrome.tabs.create({ url: site.url, active: false })
-  else await chrome.tabs.update(tab.id, { url: site.url })
-  claimed.add(tab.id)
-
+async function screenArea() {
   try {
-    for (let i = 0; i < 60; i++) {
-      await sleep(500)
-      let info
-      try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
-      if (info.status !== 'complete') continue
-      const ping = await tell(tab.id, { type: 'AB_PING', site })
-      if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
-      if (ping.ok && ping.hasComposer) return tab
-    }
-    throw new Error(`composer_never_appeared:${site.key}`)
-  } catch (e) {
-    claimed.delete(tab.id)   // a tab we never got working must not stay reserved
-    throw e
+    const displays = await chrome.system.display.getInfo()
+    const d = displays.find((x) => x.isPrimary) || displays[0]
+    return d.workArea
+  } catch {
+    const w = await chrome.windows.getCurrent()
+    return { left: 0, top: 0, width: w.width || 1440, height: w.height || 900 }
   }
 }
 
-function release(tab) {
-  if (tab) claimed.delete(tab.id)
+/** Where everything goes: app on the left ~38%, the three slots stacked on the right. */
+async function layout() {
+  const a = await screenArea()
+  const appW = Math.max(420, Math.floor(a.width * 0.38))
+  const slotW = a.width - appW
+  const slotH = Math.floor(a.height / SLOT_COUNT)
+  return {
+    app: { left: a.left, top: a.top, width: appW, height: a.height },
+    slot: (i) => ({ left: a.left + appW, top: a.top + i * slotH, width: slotW, height: slotH }),
+  }
+}
+
+async function parkAppWindow() {
+  if (appWindowId == null) return
+  try {
+    const { app } = await layout()
+    await chrome.windows.update(appWindowId, { ...app, state: 'normal', focused: false })
+  } catch { /* the student may have closed or moved it — not our problem */ }
+}
+
+async function windowAlive(id) {
+  try { await chrome.windows.get(id); return true } catch { return false }
+}
+
+/** The window for slot `i`, navigated to a brand-new chat on `site`. */
+async function slotTab(i, site) {
+  const s = slots[i]
+  if (s && await windowAlive(s.windowId)) {
+    try {
+      await chrome.tabs.update(s.tabId, { url: site.url, active: true })
+      return await chrome.tabs.get(s.tabId)
+    } catch { /* tab gone; fall through and rebuild the slot */ }
+  }
+  const { slot } = await layout()
+  const win = await chrome.windows.create({
+    url: site.url, type: 'normal', focused: false, state: 'normal', ...slot(i),
+  })
+  slots[i] = { windowId: win.id, tabId: win.tabs[0].id }
+  return win.tabs[0]
+}
+
+/** A tab in slot `i`, parked on a brand-new empty chat, with the driver alive in it. */
+async function freshChatTab(site, slot) {
+  const tab = await slotTab(slot, site)
+  for (let k = 0; k < 60; k++) {
+    await sleep(500)
+    let info
+    try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
+    if (info.status !== 'complete') continue
+    const ping = await tell(tab.id, { type: 'AB_PING', site })
+    if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
+    if (ping.ok && ping.hasComposer) return tab
+  }
+  throw new Error(`composer_never_appeared:${site.key}`)
+}
+
+/** Close the slot windows — the run is over and the answers are in the app. */
+async function closeSlots() {
+  for (const s of slots.splice(0)) {
+    try { await chrome.windows.remove(s.windowId) } catch { /* already gone */ }
+  }
 }
 
 // ---------------------------------------------------------------- the run loop
@@ -202,10 +248,10 @@ async function fetchDocument(url) {
  *  Extracting an image and pasting it would mean guessing which picture belongs to which
  *  question; the document already answers that, and the model reading it judges it far
  *  better than any anchoring heuristic. */
-async function ask(item, cfg, sites, { prompt, doc, figures }) {
+async function ask(item, cfg, sites, slot, { prompt, doc, figures }) {
   const site = { key: item.site, ...sites[item.site] }
-  const tab = await freshChatTab(site)
-  try {
+  const tab = await freshChatTab(site, slot)
+  {
     if (doc) {
       const file = await fetchDocument(doc.url)
       const attached = await tell(tab.id, {
@@ -221,8 +267,6 @@ async function ask(item, cfg, sites, { prompt, doc, figures }) {
     const markdown = await waitForAnswer(tab.id, cfg, site)
     if (!markdown || markdown.length < 10) throw new Error('empty_answer')
     return markdown
-  } finally {
-    release(tab)
   }
 }
 
@@ -236,14 +280,14 @@ async function submitAnswer(item, markdown) {
   })
 }
 
-async function answerOne(item, cfg, sites) {
+async function answerOne(item, cfg, sites, slot) {
   // First try: against the paper itself, when there is one. Two ways that can come back
   // useless — the AI says NOT_FOUND, or it writes a polite "I can't see the file" that
   // the SERVER refuses with a 422 (a refusal accepted as an answer once got cached and
   // served to a whole class). Both mean the same thing: retry once from the extracted
   // text, in a fresh chat, with any figure we anchored.
   if (item.document) {
-    const markdown = await ask(item, cfg, sites, {
+    const markdown = await ask(item, cfg, sites, slot, {
       prompt: item.prompt, doc: item.document, figures: [],
     })
     if (!markdown.trim().startsWith('NOT_FOUND')) {
@@ -256,7 +300,7 @@ async function answerOne(item, cfg, sites) {
     }
   }
 
-  const markdown = await ask(item, cfg, sites, {
+  const markdown = await ask(item, cfg, sites, slot, {
     prompt: item.fallback_prompt || item.prompt,
     figures: item.figures || [],
   })
@@ -267,8 +311,11 @@ async function answerOne(item, cfg, sites) {
 async function runLoop() {
   const cfg = await apiFetch('/extension/config')
   unavailable.clear()
-  claimed.clear()   // a previous run that was stopped mid-answer must not reserve tabs forever
   state.sitesUsed = []
+  await parkAppWindow()
+  // The student is going to walk away. A sleeping display hides every window, and a
+  // hidden window stops the AI sites streaming — so keep the screen on for the run.
+  try { chrome.power.requestKeepAwake('display') } catch { /* not fatal */ }
 
   while (state.running && !state.stopRequested) {
     const exclude = [...unavailable].join(',')
@@ -280,7 +327,7 @@ async function runLoop() {
       throw new Error("You're not signed in to ChatGPT, Claude or Gemini in this browser. " +
                       'Sign in to any one of them and press Start again.')
     }
-    if (res.done) { setStatus('finished', 'All questions answered'); break }
+    if (res.done) { setStatus('finished', 'All questions answered'); await closeSlots(); break }
     if (!res.batch.length) {
       // no work YET — the server is still sorting the bank through its routing model,
       // which takes ~20-30s. Ending here was the race that made "Answer all" look dead.
@@ -302,7 +349,7 @@ async function runLoop() {
         `${batch.map((b) => cfg.sites[b.site].label).join(', ')} answering together`)
 
     // all three run at once; Promise.allSettled so one bad tab can't sink the batch
-    const results = await Promise.allSettled(batch.map((item) => answerOne(item, cfg, cfg.sites)))
+    const results = await Promise.allSettled(batch.map((item, i) => answerOne(item, cfg, cfg.sites, i)))
 
     let progressed = false
     results.forEach((r, i) => {
@@ -358,6 +405,7 @@ async function start(projectId) {
     setStatus('error', String(e.message || e))
   } finally {
     state.running = false
+    try { chrome.power.releaseKeepAwake() } catch { /* not fatal */ }
     broadcast()
   }
 }
@@ -377,7 +425,10 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         case 'AB_START':
           // the page hands over its own session — same origin, nothing to pair
           session = { apiBase: (msg.apiBase || '').replace(/\/$/, ''), access: msg.access, refresh: msg.refresh }
-          if (sender.tab) appTabId = sender.tab.id  // send progress back to this tab
+          if (sender.tab) {
+            appTabId = sender.tab.id          // send progress back to this tab
+            appWindowId = sender.tab.windowId // and keep that window out of the slots' way
+          }
           start(msg.projectId)
           respond({ ok: true })
           break

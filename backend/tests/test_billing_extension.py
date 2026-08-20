@@ -297,13 +297,14 @@ def test_a_question_naming_a_figure_it_lacks_is_flagged(client, auth):
     assert by_idx[1]["needs_figure"] is True, "a figure reference with no figure must be flagged"
 
 
-def test_an_uploaded_paper_is_answered_from_the_document_itself(client, auth):
-    """Every question in a bank we still hold the file for is answered against that file,
-    not against our extracted text — because the file is simply a better copy of the
-    question. It carries the figures, the tables and the original wording, and the model
-    reading it decides which picture belongs to which question far better than we can.
+def test_only_questions_that_need_the_paper_get_the_paper(client, auth):
+    """Document mode attaches the uploaded file and asks for one question. It is reserved
+    for questions whose meaning is in the file — a figure row, an anchored figure, a
+    reference to a figure the paper actually has. A plain text question goes as text.
 
-    Extraction stays responsible for how many questions there are; never for what they say.
+    This used to be "every question of every PDF". Only one assistant has free upload
+    headroom, so a 13-question text PDF with no figures at all was answered entirely by
+    that one assistant while the router's choices for the other twelve were ignored.
     """
     pid = [p["id"] for p in client.get("/api/projects", headers=auth).json()
            if p["title"] == "Figure Bank"][0]
@@ -311,20 +312,48 @@ def test_an_uploaded_paper_is_answered_from_the_document_itself(client, auth):
     wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
 
     batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
-    assert batch
-    assert all(b.get("document") for b in batch), "a file-backed bank answers from the file"
+    by_idx = {b["idx"]: b for b in batch}
+    # Q1 is a plain definition: either it came from the class cache (earlier tests
+    # answered the same text) or it is in the batch WITHOUT the paper — never with it
+    if 1 in by_idx:
+        assert not by_idx[1].get("document"), "a plain definition needs no paper"
+        assert "<question>" in by_idx[1]["prompt"]
 
-    item = [b for b in batch if b["document"]["number"] == 2][0]   # it was Q2 in the file
+    item = by_idx[2]                                    # the one with the figure
+    assert item["document"]["number"] == 2
     assert item["document"]["url"].endswith(pid)
     assert "<answer_question>2</answer_question>" in item["prompt"]
     assert "Answer ONLY that one question" in item["prompt"]
-    # a paper the AI can't find the question in must not cost us the question
     assert "<question>" in item["fallback_prompt"]
 
-    # and the file itself is downloadable by its owner
     doc = client.get(item["document"]["url"], headers=auth)
-    assert doc.status_code == 200
-    assert doc.content[:2] == b"PK"                 # the docx we uploaded
+    assert doc.status_code == 200 and doc.content[:2] == b"PK"
+
+
+def test_a_text_only_pdf_never_attaches_the_paper(client, auth):
+    """Unit-1.pdf: thirteen text questions, zero figures. Every one must go as text, on
+    the site the router chose — not all thirteen to the one site that takes uploads."""
+    import io
+
+    import docx
+
+    d = docx.Document()
+    for i, t in enumerate(["Define cloud computing.", "Explain SOA and Web 2.0.",
+                           "Draw and explain the layered architecture of cloud."], 1):
+        d.add_paragraph(f"{i}. {t} (5 marks)")
+    out = io.BytesIO(); d.save(out)
+    r = client.post("/api/projects", headers=auth, data={"title": "Text Only Bank"},
+                    files={"file": ("unit.docx", out.getvalue(),
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
+    pid = r.json()["id"]
+    wait_for(client, auth, pid, lambda p: p["status"] == "review")
+    client.post(f"/api/projects/{pid}/start", headers=auth)
+    wait_for(client, auth, pid, lambda p: p["counts"].get("assist_waiting"))
+
+    batch = client.get(f"/api/extension/batch?project_id={pid}", headers=auth).json()["batch"]
+    assert len(batch) == 3
+    assert all(not b.get("document") for b in batch), "no figures anywhere → no paper attached"
+    assert all(b["site"] == b["route_site"] for b in batch), "the router's choice must stand"
 
 
 def test_the_review_save_keeps_figures_and_the_number_in_the_paper(client, auth):

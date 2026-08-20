@@ -290,7 +290,31 @@ uploads stop being accepted, which is the worst kind of failure. So:
 recorded in `extension_selectors.json` under `_routing_evidence` so it is obvious what the
 routing is based on and when it was last checked.
 
-### Test coverage — 62 total
+### Added in the hands-off pass
+
+The goal of this pass: a student presses **Answer all**, walks away for twenty minutes,
+and comes back to a finished bank. Two things stood between the product and that.
+
+**Only Gemini ever opened.** Not routing — document mode. An earlier pass attached the
+uploaded paper to *every* question of *every* PDF. Only Gemini has free upload headroom,
+so a plain 13-question text PDF with no figures at all went entirely to Gemini while the
+router's choices (ChatGPT ×10, Gemini ×2, Claude ×1) were silently overridden.
+`paper.needs_the_paper` now decides: a pure-image row, an anchored figure, a reference to
+a figure in a paper that *has* figures, or a photographed/scanned upload. Everything else
+goes as text to the site the router picked. Measured on Unit-1.pdf: before, 13/13 to
+Gemini with the paper; after, ChatGPT/Gemini/Claude as routed, no uploads at all.
+
+**Answers only arrived for the tab the student clicked.** Tabs were opened in the
+background of the main window. Chrome marks a background tab *hidden*, and the AI sites
+stop streaming and rendering their reply until it is looked at — so a hands-off run
+stalled on the first batch. Each of the three in-flight questions now gets its **own
+small window**, tiled down the right side of the screen, with the Prism window parked
+on the left so it never covers them (a covered window counts as hidden too). Every slot
+is visible at once, the run completes untouched, and the student can watch it work. The
+slot windows close themselves when the bank finishes. Needs the `system.display`
+permission (work-area size); falls back to the current window's size without it.
+
+### Test coverage — 60 total
 `backend` (47): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
