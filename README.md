@@ -2,7 +2,8 @@
 
 *One question bank, split across every AI you're signed into.*
 
-> **New to this repo? Read [HANDOVER.md](HANDOVER.md) first.**
+> **New to this repo? Read [HANDOVER.md](HANDOVER.md) first.** Launching it? [LAUNCH.md](LAUNCH.md)
+> is the ordered plan — pricing, distribution, the website, and the step list.
 > It covers current status, what's left in priority order, and the design decisions that
 > look like bugs until you know why. This README explains the product; HANDOVER explains
 > the state it's in.

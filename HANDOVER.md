@@ -1,7 +1,8 @@
 # Prism (for students) — Handover
 
 Read this first. It covers what works, what doesn't, what's deliberately the way it is,
-and what to do next in priority order.
+and what to do next in priority order. The go-to-market plan — pricing, distribution,
+website, and the day-by-day launch steps — is in [LAUNCH.md](LAUNCH.md).
 
 **Status: the browser-only engine is wired end to end. Not yet launchable.** One blocker
 (P0-1) stands between this and a real student using it.
