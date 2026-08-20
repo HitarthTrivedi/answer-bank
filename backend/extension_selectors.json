@@ -3,14 +3,15 @@
   "version": 1,
   "default_site": "chatgpt",
   "routing": {
-    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. A LIST value rotates questions of that type across the sites named — theory is the bulk of every bank and carries no file, so it is shared between sites with text headroom instead of piling on one. Graphs go to ChatGPT by the owner's decision. See _routing_evidence.",
+    "_comment": "Fallback map used when the routing AI is unavailable or its daily free allowance is spent. When it IS available it sorts the whole bank in one call and picks per question. A LIST value rotates questions of that type across the sites named — theory is the bulk of every bank and carries no file, so it is shared between sites with text headroom instead of piling on one. Graphs AND diagrams go to ChatGPT: it can generate an actual image of the figure, and the chat link is kept so the student can open it. Comparisons, derivations and high-mark theory are steered to Claude in code (router_agent._default_site) — that is what its scarce allowance is for. See _routing_evidence.",
     "numerical": "chatgpt",
     "code": "claude",
     "graph": "chatgpt",
-    "diagram": "gemini",
+    "diagram": "chatgpt",
     "theory": [
       "chatgpt",
-      "gemini"
+      "gemini",
+      "claude"
     ]
   },
   "settle_ms": 1200,
@@ -49,7 +50,7 @@
         "a[href*='/auth/login']",
         "button[data-testid='login-button']"
       ],
-      "strengths": "best at numerical working and step-by-step math (leads math reasoning benchmarks), clean LaTeX, and reading/producing graphs — plots and curve questions go here. Fast, and the clearest explainer.",
+      "strengths": "best at numerical working and step-by-step math (leads math reasoning benchmarks), clean LaTeX, graphs, and it can GENERATE IMAGES — so complex diagrams and flowcharts go here too, with the chat link kept for the student. Fast, and the clearest explainer.",
       "free_tier": "unlimited text chat, but only 3 FILE UPLOADS PER DAY — so it is excellent for questions whose text is all you need, and nearly useless for questions that need the paper attached",
       "documents": "rare"
     },
@@ -84,7 +85,7 @@
         "button[data-testid='login-with-google']",
         "a[href*='/login']"
       ],
-      "strengths": "best at long structured written answers, derivations, proofs and comparisons, and the strongest coder of the four (leads SWE-Bench Verified). Answers are the most complete and best organised — worth the most on a high-mark question.",
+      "strengths": "best at long structured written answers, derivations, proofs and COMPARISONS ('compare', 'differentiate', 'contrast'), and the strongest coder. Answers are the most complete and best organised — use it for every 7+ mark question and every comparison; it is what its small allowance is for.",
       "free_tier": "the SMALLEST free allowance of the four — a compute pool that refills on 5-hour windows, around 15 messages in practice. Spend it on questions where depth earns marks, never on bulk. 5 file uploads per chat.",
       "documents": "limited"
     },

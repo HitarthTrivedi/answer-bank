@@ -46,6 +46,7 @@ _ADDED_COLUMNS = {
         ("leased_at", "DATETIME"),
         ("source_number", "INTEGER"),
     ],
+    "answers": [("source_url", "VARCHAR(500) NOT NULL DEFAULT ''")],
 }
 
 

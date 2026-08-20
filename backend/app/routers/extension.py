@@ -271,6 +271,8 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
             "route_site": q.target_site,
             "route_reason": q.route_reason,
             "figures": _figure_payload(q),
+            # echoed on the first line of the reply; proves the scraped text answers THIS
+            "tag": solver.answer_tag(q.id),
         })
         if paper.answered_from_document(q):
             # A number only identifies a question if the paper uses it once. Spreadsheet
@@ -284,7 +286,7 @@ def _lease(db: Session, user: User, project_id: str | None, exclude: str, size: 
                 "number": number,
             }
             batch[-1]["prompt"] = solver.build_document_prompt(
-                q.text, q.qtype or "theory", q.marks, number)
+                q.text, q.qtype or "theory", q.marks, number, tag=solver.answer_tag(q.id))
             # If the AI can't find the question in the paper it answers NOT_FOUND, and the
             # extension retries in a fresh chat with the plain prompt — a miss costs one
             # extra chat, never a lost question.

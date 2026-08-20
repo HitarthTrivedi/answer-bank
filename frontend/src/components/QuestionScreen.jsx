@@ -198,6 +198,16 @@ function Answered({ q, onChanged }) {
           {q.answer.engine === 'cache'
             ? 'already answered by your class — no tab needed'
             : `answered in ${SITE_NAMES[q.target_site] || 'your AI'}`}
+          {/* the chat itself: for the generated image, a follow-up, or to check the source */}
+          {q.answer.source_url && (
+            <>
+              {' · '}
+              <a href={q.answer.source_url} target="_blank" rel="noreferrer"
+                 className="underline decoration-neutral-300 underline-offset-2 hover:text-neutral-900">
+                open the chat ↗
+              </a>
+            </>
+          )}
         </span>
       </div>
     </div>

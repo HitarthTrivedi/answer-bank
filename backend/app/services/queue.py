@@ -153,7 +153,8 @@ async def _route_question(db, q: Question) -> None:
     # 3. hand it to the student's own AI
     q.status = "assist_waiting"
     q.assist_prompt = solver.build_assist_prompt(q.text, q.qtype, q.marks,
-                                                 has_figure=bool(q.figures))
+                                                 has_figure=bool(q.figures),
+                                                 tag=solver.answer_tag(q.id))
     db.commit()
 
 

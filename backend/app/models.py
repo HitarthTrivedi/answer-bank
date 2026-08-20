@@ -126,6 +126,9 @@ class Answer(Base):
     verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # numericals only
     verify_note: Mapped[str] = mapped_column(String(300), default="")
     explain_md: Mapped[str] = mapped_column(Text, default="")        # lazy ELI5, cached once generated
+    # the chat this answer was scraped from, so the student can open it — to see a
+    # generated image, to ask a follow-up, or just to check where the text came from
+    source_url: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     question: Mapped["Question"] = relationship(back_populates="answer")

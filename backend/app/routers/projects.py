@@ -67,7 +67,7 @@ def _question_dict(q: Question) -> dict:
             "id": q.answer.id, "content_md": q.answer.content_md, "engine": q.answer.engine,
             "provider": q.answer.provider, "model": q.answer.model,
             "verified": q.answer.verified, "verify_note": q.answer.verify_note,
-            "explain_md": q.answer.explain_md,
+            "explain_md": q.answer.explain_md, "source_url": q.answer.source_url,
         }
     return d
 
@@ -320,6 +320,7 @@ def edit_answer(answer_id: str, body: AnswerEdit,
 
 class AssistSubmit(BaseModel):
     content_md: str = Field(min_length=10, max_length=60_000)
+    source_url: str = Field(default="", max_length=500)   # the chat it was read from
 
 
 @router.post("/questions/{question_id}/assist")
@@ -344,21 +345,35 @@ def submit_assist(question_id: str, body: AssistSubmit,
         raise HTTPException(422, f"That reply was not saved as an answer — {why}. "
                                  "Try again, or a different AI.")
 
+    # The reply's first line should echo this question's tag. A tag for ANOTHER question
+    # means the scraper read the wrong chat — exactly the cross-wiring that once pasted
+    # the answer to Q11 onto Q9. No tag at all is tolerated (a student pasting by hand
+    # may have trimmed it); a wrong one is not.
+    found = solver.TAG_RE.search(body.content_md[:400])
+    if found and found.group(1) != q.id[:8]:
+        q.status = "assist_waiting"
+        q.leased_at = None
+        db.commit()
+        raise HTTPException(422, "That reply is tagged as the answer to a different question — "
+                                 "not saved. It goes out again with the next batch.")
+    content = solver.TAG_RE.sub("", body.content_md, count=1).strip()
+
     verified, note = (None, "")
     if q.qtype == "numerical":
-        verified, note = verify.check_numerical(body.content_md)
+        verified, note = verify.check_numerical(content)
 
     if q.answer is not None:
         db.delete(q.answer)
         db.flush()
-    db.add(Answer(question_id=q.id, content_md=body.content_md.strip(), engine="assist",
-                  provider="assist", model="student-supplied", verified=verified, verify_note=note))
+    db.add(Answer(question_id=q.id, content_md=content, engine="assist",
+                  provider="assist", model="student-supplied", verified=verified, verify_note=note,
+                  source_url=body.source_url.strip()[:500]))
     q.status = "answered"
     q.assist_prompt = ""
     q.leased_at = None
     db.commit()
     db.refresh(q)  # reload the answer relationship so the response carries it
-    cache.store(db, q.text, q.marks, q.qtype or "theory", content_md=body.content_md.strip(),
+    cache.store(db, q.text, q.marks, q.qtype or "theory", content_md=content,
                 provider="assist", model="student-supplied", verified=verified)
     wake()  # let the worker flip the project to done if this was the last one
     return _question_dict(q)

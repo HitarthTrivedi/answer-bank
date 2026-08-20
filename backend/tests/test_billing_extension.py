@@ -427,6 +427,40 @@ def test_no_work_yet_is_not_the_same_as_no_work(client, auth):
     assert final["batch"], final
 
 
+def test_an_answer_tagged_for_another_question_is_refused(client, auth):
+    """The cross-wiring incident: a run pasted the reply to "challenges of cloud" under
+    "advantages and disadvantages of cloud". Every prompt now asks the AI to echo the
+    question's own tag on its first line; a reply carrying a DIFFERENT tag is the wrong
+    chat and bounces, while a matching (or missing) tag is accepted with the tag stripped
+    so it never reaches the document."""
+    from app.services import solver
+
+    pid = _started_project(client, auth, "Tag Bank",
+                           text="1. Explain the advantages of cloud computing. (5 marks)\n"
+                                "2. Explain the challenges of cloud computing. (5 marks)\n")
+    p = client.get(f"/api/projects/{pid}", headers=auth).json()
+    q1, q2 = sorted(p["questions"], key=lambda q: q["idx"])
+    assert solver.answer_tag(q1["id"]) in q1["assist_prompt"], "the prompt must ask for the tag"
+
+    work = client.get(f"/api/extension/work?project_id={pid}", headers=auth).json()
+    target = work["question_id"]
+    other = q2["id"] if target == q1["id"] else q1["id"]
+
+    wrong = f"{solver.answer_tag(other)}\n\n**Challenges** of cloud computing include vendor lock-in, data privacy and downtime risk."
+    r = client.post(f"/api/questions/{target}/assist",
+                    json={"content_md": wrong, "source_url": "https://chatgpt.com/c/abc"}, headers=auth)
+    assert r.status_code == 422, "another question's tag must bounce"
+
+    right = f"**{solver.answer_tag(target)}**\n\n**Advantages** of cloud computing include elasticity, pay-as-you-go pricing and global reach."
+    r = client.post(f"/api/questions/{target}/assist",
+                    json={"content_md": right, "source_url": "https://chatgpt.com/c/abc"}, headers=auth)
+    assert r.status_code == 200, r.text
+    saved = r.json()["answer"]
+    assert "PRISM-Q-" not in saved["content_md"], "the tag is plumbing, not content"
+    assert saved["content_md"].startswith("**Advantages**")
+    assert saved["source_url"] == "https://chatgpt.com/c/abc", "the chat link is kept for the student"
+
+
 def test_a_cant_answer_reply_is_never_accepted_as_an_answer(client, auth):
     """The incident this guards against: a document upload failed, the AI replied "No file
     appears to be attached to this chat", and that sentence was accepted, stored, CACHED,

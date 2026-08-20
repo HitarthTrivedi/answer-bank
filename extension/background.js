@@ -167,17 +167,31 @@ async function slotTab(i, site) {
   return win.tabs[0]
 }
 
-/** A tab in slot `i`, parked on a brand-new empty chat, with the driver alive in it. */
-async function freshChatTab(site, slot) {
+/** A tab in slot `i`, parked on a brand-new EMPTY chat, with the driver alive in it.
+ *
+ *  "Empty" is checked, not assumed. These sites are single-page apps: the URL changes
+ *  to a new chat before the old conversation leaves the screen, and a prompt sent in
+ *  that gap lands in the OLD thread — with the old question as context. That is how one
+ *  run answered "challenges of cloud" under "advantages and disadvantages of cloud". */
+async function freshChatTab(site, slot, label) {
   const tab = await slotTab(slot, site)
-  for (let k = 0; k < 60; k++) {
+  let readySince = null
+  for (let k = 0; k < 80; k++) {
     await sleep(500)
     let info
     try { info = await chrome.tabs.get(tab.id) } catch { throw new Error('tab_closed') }
     if (info.status !== 'complete') continue
-    const ping = await tell(tab.id, { type: 'AB_PING', site })
+    const ping = await tell(tab.id, { type: 'AB_PING', site, label })
     if (ping.ok && ping.loggedOut) throw new Error(`not_signed_in:${site.key}`)
-    if (ping.ok && ping.hasComposer) return tab
+    if (!ping.ok || !ping.hasComposer) continue
+    if (ping.turns === 0) return tab
+    // composer is there but old turns are still on screen: give the SPA a few seconds,
+    // then force a real reload of the new-chat URL rather than send into the old thread
+    readySince = readySince || Date.now()
+    if (Date.now() - readySince > 4000) {
+      await chrome.tabs.reload(tab.id)
+      readySince = null
+    }
   }
   throw new Error(`composer_never_appeared:${site.key}`)
 }
@@ -196,7 +210,7 @@ async function closeSlots() {
  *  assigning work to them via ?exclude=. */
 const unavailable = new Set()
 
-async function waitForAnswer(tabId, cfg, site) {
+async function waitForAnswer(tabId, cfg, site, label) {
   const deadline = Date.now() + (cfg.max_wait_s || 300) * 1000
   let lastLen = -1
   let stable = 0
@@ -205,7 +219,7 @@ async function waitForAnswer(tabId, cfg, site) {
     if (state.stopRequested) throw new Error('stopped')
     await sleep(cfg.poll_ms || 1500)
 
-    const p = await tell(tabId, { type: 'AB_PROBE', site })
+    const p = await tell(tabId, { type: 'AB_PROBE', site, label })
     if (!p.ok) continue
     if (p.generating) { stable = 0; lastLen = p.length; continue }
     if (p.turns <= p.baseline || p.length === 0) continue
@@ -216,8 +230,9 @@ async function waitForAnswer(tabId, cfg, site) {
     if (p.length === lastLen) {
       if (++stable >= 2) {
         await sleep(cfg.settle_ms || 1200)
-        const final = await tell(tabId, { type: 'AB_PROBE', site })
-        return final.ok && final.markdown ? final.markdown : p.markdown
+        const final = await tell(tabId, { type: 'AB_PROBE', site, label })
+        const best = final.ok && final.markdown ? final : p
+        return { markdown: best.markdown, url: best.url || p.url || '' }
       }
     } else {
       stable = 0
@@ -250,7 +265,8 @@ async function fetchDocument(url) {
  *  better than any anchoring heuristic. */
 async function ask(item, cfg, sites, slot, { prompt, doc, figures }) {
   const site = { key: item.site, ...sites[item.site] }
-  const tab = await freshChatTab(site, slot)
+  const label = `Prism · Q${item.idx} → ${site.label || site.key}`
+  const tab = await freshChatTab(site, slot, label)
   {
     if (doc) {
       const file = await fetchDocument(doc.url)
@@ -261,12 +277,20 @@ async function ask(item, cfg, sites, slot, { prompt, doc, figures }) {
       await sleep(cfg.upload_settle_ms || 4000)  // the upload must finish before a send lands
     }
 
-    const sent = await tell(tab.id, { type: 'AB_SEND', text: prompt, site, figures: figures || [] })
+    const sent = await tell(tab.id, { type: 'AB_SEND', text: prompt, site, label, figures: figures || [] })
     if (!sent.ok) throw new Error(sent.error)
 
-    const markdown = await waitForAnswer(tab.id, cfg, site)
+    const { markdown, url } = await waitForAnswer(tab.id, cfg, site, label)
     if (!markdown || markdown.length < 10) throw new Error('empty_answer')
-    return markdown
+
+    // The reply must carry THIS question's tag. Another question's tag means we read the
+    // wrong chat; the server would refuse it anyway, but failing here keeps the slot's
+    // retry local and fast. No tag at all is tolerated — some models drop it.
+    const m = /PRISM-Q-([0-9a-f]{8})/.exec(markdown.slice(0, 400))
+    if (m && item.tag && m[1] !== item.tag.slice(-8)) {
+      throw new Error(`answer_for_another_question:${m[1]}`)
+    }
+    return { markdown, url }
   }
 }
 
@@ -274,9 +298,9 @@ async function ask(item, cfg, sites, slot, { prompt, doc, figures }) {
  *
  *  A paper the AI can't locate the question in isn't a lost question: it says NOT_FOUND
  *  and we retry once from the extracted text, with any figure we managed to anchor. */
-async function submitAnswer(item, markdown) {
+async function submitAnswer(item, { markdown, url }) {
   await apiFetch(`/questions/${item.question_id}/assist`, {
-    method: 'POST', body: { content_md: markdown },
+    method: 'POST', body: { content_md: markdown, source_url: url || '' },
   })
 }
 
@@ -287,12 +311,12 @@ async function answerOne(item, cfg, sites, slot) {
   // served to a whole class). Both mean the same thing: retry once from the extracted
   // text, in a fresh chat, with any figure we anchored.
   if (item.document) {
-    const markdown = await ask(item, cfg, sites, slot, {
+    const reply = await ask(item, cfg, sites, slot, {
       prompt: item.prompt, doc: item.document, figures: [],
     })
-    if (!markdown.trim().startsWith('NOT_FOUND')) {
+    if (!reply.markdown.replace(/PRISM-Q-[0-9a-f]{8}/, '').trim().startsWith('NOT_FOUND')) {
       try {
-        await submitAnswer(item, markdown)
+        await submitAnswer(item, reply)
         return { key: item.site, ...sites[item.site] }
       } catch (e) {
         if (e.status !== 422) throw e   // 422 = the server judged it a non-answer
@@ -300,11 +324,11 @@ async function answerOne(item, cfg, sites, slot) {
     }
   }
 
-  const markdown = await ask(item, cfg, sites, slot, {
+  const reply = await ask(item, cfg, sites, slot, {
     prompt: item.fallback_prompt || item.prompt,
     figures: item.figures || [],
   })
-  await submitAnswer(item, markdown)
+  await submitAnswer(item, reply)
   return { key: item.site, ...sites[item.site] }
 }
 

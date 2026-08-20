@@ -141,6 +141,26 @@ function block(node) {
     if (math !== null) { out += math; continue }
 
     const tag = el.tagName.toUpperCase()
+
+    if (tag === 'IMG') {
+
+      // a generated diagram/plot: keep the link. The URL is the site's own (often
+
+      // expiring), so the chat link on the answer is what the student relies on.
+
+      const src = el.currentSrc || el.getAttribute('src') || ''
+
+      if (/^https?:/.test(src) && !/avatar|icon|emoji|logo/i.test(src + (el.alt || '')) &&
+
+          (el.naturalWidth || el.width || 200) >= 120) {
+
+        return `\n\n![${(el.alt || 'figure').replace(/[\[\]]/g, '')}](${src})\n\n`
+
+      }
+
+      return ''
+
+    }
     switch (tag) {
       case 'PRE': out += codeBlock(el); break
       case 'CODE': out += `\`${el.textContent}\``; break

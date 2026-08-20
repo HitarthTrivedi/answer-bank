@@ -186,9 +186,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         ok: true,
         hasComposer: !!(SITE && pick(SITE.composer)),
         loggedOut: !!(SITE && isLoggedOut()),
+        // a brand-new chat has no assistant turns. If some are still on screen the site
+        // hasn't finished switching away from the previous conversation — sending now
+        // would land the prompt in the OLD thread, with the old context.
+        turns: SITE ? assistantTurns().length : 0,
       })
       return true
     }
+
+    // Name the window after the question it is working on, so three small windows
+    // side by side read "Q4 → ChatGPT", "Q5 → Gemini", "Q6 → ChatGPT" instead of three
+    // identical site titles. The sites rename their tab later; the probe re-asserts it.
+    if (msg.label) document.title = msg.label
 
     if (!SITE && msg.site) SITE = msg.site
 
@@ -259,6 +268,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         baseline: baselineTurns,
         length: md.length,
         markdown: md,
+        url: location.href,   // the chat this answer lives in — kept so the student can open it
       })
       return true
     }

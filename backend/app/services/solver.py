@@ -10,6 +10,7 @@ Design decisions that matter:
 - Graphs/diagrams come back as *specs* (graphspec JSON / mermaid), never as executable
   code. The server renders specs with matplotlib/sympy under an expression allowlist.
 """
+import re
 
 
 def _depth(marks: int | None) -> str:
@@ -74,6 +75,8 @@ _TYPE_RULES = {
         "Structure: 1-2 lines of context → a ```mermaid block for the figure (flowchart TD/LR, "
         "sequenceDiagram, erDiagram, or classDiagram — pick what fits) → **Key points**: what the "
         "figure shows, as a short list. Keep node labels short; details go in the text.\n"
+        "If you are able to generate images, ALSO generate one clean, labelled image of this "
+        "diagram after the mermaid block — the student will open this chat to view and save it.\n"
         "If the figure carries data as well as shape (a Bayesian network's probability tables, a "
         "game tree's leaf values, an ER diagram's attributes), put that data in a markdown table "
         "beside the figure — a reader marking this answer needs the numbers, not just the picture."
@@ -99,11 +102,27 @@ _FIGURE_NOTE = (
 )
 
 
+# Every prompt carries the question's own tag and asks for it back on the first line.
+# That line is the only proof that a reply scraped out of a browser tab is the reply to
+# THIS prompt — one run pasted the answer to "challenges of cloud" onto "advantages and
+# disadvantages of cloud", and nothing downstream could have noticed. The server strips
+# the tag before storing; a tag for a different question is rejected outright.
+TAG_PREFIX = "PRISM-Q-"
+TAG_RE = re.compile(r"\**\s*PRISM-Q-([0-9a-f]{8})\s*\**[ \t]*:?[ \t]*\n?")
+
+
+def answer_tag(question_id: str) -> str:
+    return TAG_PREFIX + question_id[:8]
+
+
 def build_solver_messages(text: str, qtype: str, marks: int | None,
-                          has_figure: bool = False) -> list[dict]:
+                          has_figure: bool = False, tag: str = "") -> list[dict]:
+    tag_rule = (f"FIRST LINE of your reply must be exactly this tag and nothing else: {tag}\n"
+                "Then start the answer on the next line.\n\n") if tag else ""
     system = (
         "You are answering ONE exam question for a student's answer document. "
         "Accuracy beats verbosity; structure beats prose walls.\n\n"
+        f"{tag_rule}"
         f"QUESTION_TYPE: {qtype}\n"
         f"{_depth(marks)}\n\n"
         f"{_TYPE_RULES.get(qtype, _TYPE_RULES['theory'])}\n\n"
@@ -140,7 +159,7 @@ _LOCATOR_CHARS = 160
 
 
 def build_document_prompt(text: str, qtype: str, marks: int | None,
-                          number: int | None = None) -> str:
+                          number: int | None = None, tag: str = "") -> str:
     """For a question answered against the paper itself rather than against its extracted
     text — a graph to read, a circuit to trace, a row that is nothing but a picture, or
     simply a scan where our text extraction is the weakest link.
@@ -155,7 +174,7 @@ def build_document_prompt(text: str, qtype: str, marks: int | None,
     we locate the question by quoting its opening instead, so image questions in unnumbered
     papers are not left stranded.
     """
-    msgs = build_solver_messages(text, qtype, marks)
+    msgs = build_solver_messages(text, qtype, marks, tag=tag)
     body = text.strip()
     is_placeholder = body.startswith("[")
 
@@ -180,10 +199,10 @@ def build_document_prompt(text: str, qtype: str, marks: int | None,
 
 
 def build_assist_prompt(text: str, qtype: str, marks: int | None,
-                        has_figure: bool = False) -> str:
+                        has_figure: bool = False, tag: str = "") -> str:
     """Single copy-paste blob for the student's own ChatGPT/Claude tab. The extension
     pastes any figure alongside it; a student pasting by hand attaches it themselves."""
-    msgs = build_solver_messages(text, qtype, marks, has_figure)
+    msgs = build_solver_messages(text, qtype, marks, has_figure, tag=tag)
     return msgs[0]["content"] + "\n\n" + msgs[1]["content"]
 
 

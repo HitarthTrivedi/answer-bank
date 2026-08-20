@@ -314,8 +314,39 @@ is visible at once, the run completes untouched, and the student can watch it wo
 slot windows close themselves when the bank finishes. Needs the `system.display`
 permission (work-area size); falls back to the current window's size without it.
 
-### Test coverage — 60 total
-`backend` (47): auth + refresh rotation, upload magic bytes, extraction, SymPy
+### Added after the first hands-off run
+
+The first untouched run finished the bank. Three things it showed, all fixed:
+
+- **A wrong answer under the right question.** Q9 ("advantages and disadvantages of
+  cloud") received the reply to Q11 ("challenges"). Root cause: the AI sites are SPAs —
+  the URL flips to a new chat before the old conversation leaves the screen, and a prompt
+  sent in that gap lands in the *old* thread with the old question as context. Two guards
+  now: the extension refuses to send until the page shows **zero assistant turns**
+  (reloading the new-chat URL if the SPA dawdles), and every prompt asks the AI to echo
+  the question's own tag (`PRISM-Q-<id8>`) on its first line. The server strips a matching
+  tag and **rejects a reply tagged for a different question** (`solver.TAG_RE`,
+  `/assist`). A missing tag is tolerated — some models drop it — a wrong one never is.
+- **Claude never used.** The router model, told Claude's allowance is the smallest,
+  avoided it entirely. Comparisons ("compare", "differentiate", "contrast"), derivations,
+  proofs and any question worth 7+ marks now go to Claude outright, in both the model
+  prompt and the keyword fallback (`router_agent._deserves_claude`). That is what its
+  allowance is for.
+- **"Where did this come from?"** Three identical site windows are hard to tell apart,
+  and a scraped answer had no provenance. Each slot window is now titled
+  `Prism · Q4 → ChatGPT`, and every answer keeps the **chat URL** it was read from
+  (`Answer.source_url`, shown as "open the chat ↗"). That link is also how a student gets
+  at a **generated image**: diagrams and flowcharts are routed to ChatGPT, whose prompt
+  asks for a mermaid block (renders in the document) *and* an image if it can draw one.
+  Image URLs that appear in a reply are kept as markdown images, but they are the site's
+  own expiring links — the chat link is the durable one.
+
+Owner asked about Kimi for diagrams and thelazycook.in: Kimi was dropped the day before
+over unverified selectors and is not re-added here; thelazycook.in is a research/notes
+assistant, not a diagram tool. ChatGPT image generation covers the need.
+
+### Test coverage — 69 total
+`backend` (54): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
 question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →
