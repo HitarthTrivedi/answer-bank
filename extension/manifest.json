@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Prism Runner",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Answers your question bank using the AI tabs you're already signed into.",
   "permissions": [
     "storage",

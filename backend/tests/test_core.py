@@ -460,3 +460,20 @@ def test_the_inline_scan_does_not_fire_on_a_normal_document():
     assert all(c["kind"] != "inline" for c in extractor._candidates(PLAIN_BANK))
     assert all(c["kind"] != "inline" for c in extractor._candidates(ANSWER_DOC))
     assert all(c["kind"] != "inline" for c in extractor._candidates(BULLETED))
+
+
+def test_a_language_less_fence_that_is_obviously_mermaid_is_relabelled():
+    """Gemini shows code under a "Code snippet" header with no language class, so a good
+    ```mermaid diagram arrived as a bare ``` block and the deck rendered a diagram as
+    source code. The content gives it away; relabel it."""
+    from app.services import fences
+
+    raw = ("Layered architecture.\n\nCode snippet\n\n```\nflowchart TD\n"
+           "    subgraph Physical[\"Hardware\"]\n        HW[CPU / RAM]\n    end\n```\n\n"
+           "Some prose with ```\nprint('hi')\n``` inline code stays untouched.")
+    out = fences.repair(raw)
+    assert "```mermaid\nflowchart TD" in out
+    assert "Code snippet" not in out
+    assert "```\nprint('hi')" in out, "a block that isn't a diagram keeps its bare fence"
+    assert fences.repair("```python\nflowchart TD\n```") == "```python\nflowchart TD\n```", \
+        "an explicit language is never second-guessed"

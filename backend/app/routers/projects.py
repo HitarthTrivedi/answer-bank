@@ -13,8 +13,8 @@ from ..config import DATA_DIR, get_settings
 from ..db import SessionLocal, get_db
 from ..models import Answer, AnswerAsset, Figure, Project, Question, User
 from ..security import audit, client_ip, current_user
-from ..services import (billing, cache, diagrams, explainer, export, extractor, ingest,
-                        paper, refusal, solver, verify)
+from ..services import (billing, cache, diagrams, explainer, export, extractor, fences,
+                        ingest, paper, refusal, solver, verify)
 from ..services.queue import wake
 
 log = logging.getLogger("prism.projects")
@@ -356,7 +356,7 @@ def submit_assist(question_id: str, body: AssistSubmit,
         db.commit()
         raise HTTPException(422, "That reply is tagged as the answer to a different question — "
                                  "not saved. It goes out again with the next batch.")
-    content = solver.TAG_RE.sub("", body.content_md, count=1).strip()
+    content = fences.repair(solver.TAG_RE.sub("", body.content_md, count=1)).strip()
 
     verified, note = (None, "")
     if q.qtype == "numerical":

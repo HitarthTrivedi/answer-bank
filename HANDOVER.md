@@ -345,8 +345,21 @@ Owner asked about Kimi for diagrams and thelazycook.in: Kimi was dropped the day
 over unverified selectors and is not re-added here; thelazycook.in is a research/notes
 assistant, not a diagram tool. ChatGPT image generation covers the need.
 
-### Test coverage — 69 total
-`backend` (54): auth + refresh rotation, upload magic bytes, extraction, SymPy
+### Diagrams: what LazyCook-quality actually was
+
+The owner showed thelazycook.in rendering excellent layered diagrams and asked for the
+same. Those are **Mermaid** (default theme: tinted subgraph groups, lavender nodes) — the
+pipeline Prism already had. The gap was a scraper bug: Gemini shows code blocks under a
+"Code snippet" header with no language class, so a perfectly good `flowchart TD` arrived
+as a bare ``` fence and the deck rendered the diagram as source code. Fixed at both ends —
+`html2md.sniffLang` at scrape time, and `services/fences.repair` on every incoming answer
+(covers hand-pasted ones too; the stored answers were repaired in place). The diagram
+prompt now makes the mermaid block mandatory and asks for `subgraph` per layer, separate
+blocks for alternatives (Type 1 vs Type 2 hypervisor), and short node labels. The deck's
+diagram card uses Mermaid's default theme, with full-size view and PNG download.
+
+### Test coverage — 70 total
+`backend` (55): auth + refresh rotation, upload magic bytes, extraction, SymPy
 verification incl. injection payloads, class cache, prompt-injection envelope, the full
 pipeline driven by a stand-in for the browser (`tests/helpers.py`), **proof that no
 question is ever answered server-side**, **export paywall** (free → 402 → paid unlock →

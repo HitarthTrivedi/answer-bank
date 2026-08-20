@@ -65,10 +65,22 @@ function langOf(codeEl) {
   return ''
 }
 
+// Gemini renders every code block under a "Code snippet" header with no language class
+// in the DOM, so a ```mermaid diagram would arrive as a bare ``` block and the deck
+// would show a diagram as source code. The content gives the language away.
+const MERMAID_START = /^\s*(?:%%\{.*?\}%%\s*)?(?:(?:flowchart|graph)\s+(?:TD|TB|BT|LR|RL)\b|sequenceDiagram|erDiagram|classDiagram|stateDiagram(?:-v2)?|gantt|pie|mindmap|journey|timeline)\b/i
+const GRAPHSPEC_HINT = /^\s*\{[\s\S]*"(?:expressions|xrange)"/
+
+function sniffLang(body) {
+  if (MERMAID_START.test(body)) return 'mermaid'
+  if (GRAPHSPEC_HINT.test(body)) return 'graphspec'
+  return ''
+}
+
 function codeBlock(pre) {
   const codeEl = pre.querySelector('code') || pre
-  const lang = langOf(codeEl)
   const body = codeEl.textContent.replace(/\n+$/, '')
+  const lang = langOf(codeEl) || sniffLang(body)
   return `\n\n\`\`\`${lang}\n${body}\n\`\`\`\n\n`
 }
 
