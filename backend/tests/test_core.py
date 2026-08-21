@@ -477,3 +477,43 @@ def test_a_language_less_fence_that_is_obviously_mermaid_is_relabelled():
     assert "```\nprint('hi')" in out, "a block that isn't a diagram keeps its bare fence"
     assert fences.repair("```python\nflowchart TD\n```") == "```python\nflowchart TD\n```", \
         "an explicit language is never second-guessed"
+
+
+GTU_PAPER = """GTU MAD (3170726) – Sample Mid-Semester Paper 1
+Mobile Application Development | Maximum Marks: 30 | Suggested Time: 1 Hour
+Q.1  Answer all. (6 Marks)
+(a) Define SDLC. Write any three stages of SDLC. [3]
+(b) What is Android Architecture? Name any four main layers/components. [3]
+Q.2  Attempt any ONE. (10 Marks)
+(a) Explain Activity Lifecycle with a neat diagram. Also explain any four lifecycle methods. [7]
+(b) Explain Android application building blocks/components. [3]
+OR
+(a) Explain Android Architecture with a neat diagram. [7]
+(b) What is Android Manifest file? Write its uses. [3]
+Q.3  Attempt any ONE. (7 Marks)
+(a) Explain Linear Layout, Relative Layout and Frame Layout with suitable examples. [7]
+OR
+(b) Explain ScrollView and ListView. Explain any ONE with a simple example. [7]
+High-Probability Revision Focus
+• Q4 Android Architecture — major theory/diagram question.
+• Q9 Activity lifecycle and its methods
+"""
+
+
+def test_a_gtu_exam_paper_splits_into_its_sub_parts():
+    """The GTU paper shape: "Q.1  Answer all." is a SLOT, the lettered sub-parts under it
+    are the questions, "OR" separates alternatives a student wants both of, marks are a
+    trailing "[7]", and a revision-notes section at the end name-drops "Q4" in bullets.
+    This uploaded as "No questions detected"."""
+    qs = extractor.heuristic_extract(GTU_PAPER)
+    texts = [q["text"] for q in qs]
+
+    assert len(qs) == 8, texts
+    assert texts[0].startswith("(a) Define SDLC")
+    assert [q["marks"] for q in qs] == [3, 3, 7, 3, 7, 3, 7, 7]
+    assert [q["number"] for q in qs] == [1, 1, 2, 2, 2, 2, 3, 3]
+    # the instruction header is not a question, OR is not a question, the trailer is gone
+    assert not any("Attempt any" in t or t.strip() == "OR" for t in texts)
+    assert not any("Revision Focus" in t or "major theory" in t for t in texts)
+    # a bulleted "Q4 ..." in the notes is NOT a question header
+    assert not any(q["number"] in (4, 9) for q in qs)

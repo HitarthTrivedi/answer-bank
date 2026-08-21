@@ -27,6 +27,15 @@ log = logging.getLogger("prism.extractor")
 _BULLET = r"^[\s\u25a0\u25aa\u2022\u25cf\u25e6\u2023\u2043\-\*\u2212\u2013]*"
 # "Q7." / "Question 7)" — an explicit marker, which a list inside an answer never uses.
 _Q_MARKER = re.compile(_BULLET + r"Q(?:uestion)?\s*\.?\s*(\d{1,3})\s*[\.\):]\s*(.*)", re.IGNORECASE)
+# "Q.1  Answer all." — GTU papers put the dot after the Q and nothing after the number.
+# Normalised to "Q1. Answer all." before matching, so the strict marker above applies.
+# Only the dotted form qualifies: "• Q4 Android Architecture" in a revision-notes bullet
+# list must never become a question header.
+_Q_DOTTED = re.compile(r"^(\s*)Q\s*\.\s*(\d{1,3})\s+(?=\S)")
+
+
+def _normalise(line: str) -> str:
+    return _Q_DOTTED.sub(lambda m: f"{m.group(1)}Q{m.group(2)}. ", line, count=1)
 # "7." / "7)" — a bare number: a question in a plain bank, but also every algorithm step.
 _NUM_LINE = re.compile(_BULLET + r"(\d{1,3})\s*[\.\):]\s+(.*)")
 # "7Define AI..." — no separator at all. This is what a SPREADSHEET exported to PDF looks
@@ -47,7 +56,8 @@ _NUM_ALONE = re.compile(r"^\s*(\d{1,3})\s*$")
 # decimals that slip past ("Web 2.03.Explain" matching "03") are handled by the
 # sequence filter: only numbers that continue the count are believed.
 _INLINE_NUM = re.compile(r"(?<!\d)(\d{1,3})\.(?=[A-Z\"'“‘])")
-_MARKS = re.compile(r"[\(\[]\s*(\d{1,3})\s*(?:marks?|M)\s*[\)\]]|\b(\d{1,3})\s*marks?\b", re.IGNORECASE)
+_MARKS = re.compile(r"[\(\[]\s*(\d{1,3})\s*(?:marks?|M)\s*[\)\]]|\b(\d{1,3})\s*marks?\b"
+                    r"|\[\s*(\d{1,3})\s*\]\s*$", re.IGNORECASE)
 
 _MARKER_CONFIDENCE = 3     # fewer explicit markers than this and they're incidental
 _PREVIEW_CHARS = 110       # of each candidate, shown to the model
@@ -77,12 +87,20 @@ def _candidates(raw: str) -> list[dict]:
         pos += len(line) + 1
 
     out = []
-    for i, line in enumerate(lines):
+    for i, raw_line in enumerate(lines):
+        line = _normalise(raw_line)
         for kind, pattern in (("marker", _Q_MARKER), ("number", _NUM_LINE), ("glued", _NUM_GLUED)):
             m = pattern.match(line)
             if m:
+                opening = (m.group(2) or "").strip()
+                if _INSTRUCTION.match(opening):
+                    # "Q.2 Attempt any ONE." — show the picker the first real sub-part
+                    sub = next((_SUBPART.match(x) for x in lines[i + 1:i + 1 + _LOOKAHEAD]
+                                if _SUBPART.match(x)), None)
+                    if sub:
+                        opening = sub.group(2).strip()
                 out.append({"offset": offsets[i], "kind": kind, "num": int(m.group(1)),
-                            "opening": (m.group(2) or "").strip()[:_PREVIEW_CHARS]})
+                            "opening": opening[:_PREVIEW_CHARS]})
                 break
         else:
             m = _NUM_ALONE.match(line)
@@ -158,12 +176,66 @@ def _sequence_only(cands: list[dict]) -> list[dict]:
     return max(readings, key=len)
 
 
+# University exam papers — GTU's in particular — number the QUESTION SLOTS and put the
+# actual questions underneath as lettered sub-parts:
+#
+#     Q.2  Attempt any ONE. (10 Marks)
+#     (a) Explain Activity Lifecycle with a neat diagram. [7]
+#     OR
+#     (a) Explain Android Architecture with a neat diagram. [7]
+#
+# The header is an instruction, not a question; every sub-part is a question in its own
+# right; "OR" separates alternatives a student would want answered BOTH ways.
+_SUBPART = re.compile(r"^\s*\(?([a-hA-H])\)\s+(\S.*)$")
+_OR_LINE = re.compile(r"^\s*\(?OR\)?\s*[:.]?\s*$", re.IGNORECASE)
+_INSTRUCTION = re.compile(r"^\s*(?:answer|attempt|solve|do|write)\s+(?:all|any|the following)\b",
+                          re.IGNORECASE)
+# A title-ish line followed by bullets: the revision notes some papers tack on the end.
+_TRAILER_TITLE = re.compile(r"^[A-Z][A-Za-z\-/ ]{3,60}[:?]?$")
+_BULLET_LINE = re.compile(r"^\s*[\u2022\u25a0\u25cf\-\*]\s+")
+
+
+def _subparts(segment: str) -> list[tuple[str, str]] | None:
+    """Split one question's raw segment into (letter, text) sub-parts, or None if it has
+    none. Continuation lines attach to the sub-part above; OR lines are dropped; a
+    trailing title+bullets section is cut off."""
+    lines = segment.split("\n")
+    parts: list[list[str]] = []
+    letters: list[str] = []
+    for j, line in enumerate(lines):
+        if _OR_LINE.match(line):
+            continue
+        m = _SUBPART.match(line)
+        if m:
+            letters.append(m.group(1).lower())
+            parts.append([m.group(2).strip()])
+            continue
+        if not parts:
+            continue                                   # header / instruction line
+        nxt = next((x for x in lines[j + 1:] if x.strip()), "")
+        if _TRAILER_TITLE.match(line.strip()) and _BULLET_LINE.match(nxt):
+            break                                      # "High-Probability Revision Focus" + bullets
+        if line.strip():
+            parts[-1].append(line.strip())
+    if not parts:
+        return None
+    return [(l, " ".join(p)) for l, p in zip(letters, parts)]
+
+
 def _build(raw: str, kept: list[dict]) -> list[dict]:
     """Slice the document at the kept boundaries."""
     out = []
     for i, c in enumerate(kept):
         end = kept[i + 1]["offset"] if i + 1 < len(kept) else len(raw)
-        body = " ".join(raw[c["offset"]:end].split())
+        segment = raw[c["offset"]:end]
+        subs = _subparts(segment)
+        if subs:
+            # the slot number is shared; the letter rides in the text so "Q2 (a)" and the
+            # OR-alternative "Q2 (a)" stay distinguishable on screen
+            for letter, text in subs:
+                out.append(_finish(f"({letter}) {text}", c["offset"], c.get("num")))
+            continue
+        body = _normalise(" ".join(segment.split()))
         # Drop the leading "Q7." / "7." / "7" — the number is positional, not part of the
         # question. Whichever shape matches, keep only what followed it.
         for pattern in (_Q_MARKER, _NUM_LINE, _NUM_GLUED):
@@ -242,8 +314,8 @@ def _recover_run_on_rows(questions: list[dict]) -> list[dict]:
 
 def _finish(text: str, offset: int = 0, number: int | None = None) -> dict:
     m = _MARKS.search(text)
-    return {"text": text, "marks": int(m.group(1) or m.group(2)) if m else None,
-            "offset": offset, "number": number}
+    marks = int(m.group(1) or m.group(2) or m.group(3)) if m else None
+    return {"text": text, "marks": marks, "offset": offset, "number": number}
 
 
 # ---------------------------------------------------------------- the AI pass
