@@ -163,6 +163,15 @@ def _mock_routing_response(messages: list[dict]) -> str:
 
     body = messages[-1]["content"] if messages else ""
 
+    if "TASK: extract_questions" in system:
+        # the mock "reads" the paper with the heuristic and returns it verbatim — which
+        # is exactly what a well-behaved model does; tests for the verifier feed in
+        # paraphrased text directly
+        from .extractor import heuristic_extract
+
+        qs = heuristic_extract(body)
+        return json.dumps({"questions": [{"number": q["number"], "text": q["text"]} for q in qs]})
+
     if "TASK: route_questions" in system:
         # a numbered listing in, one route per line out — same shape the real router returns
         routes = []

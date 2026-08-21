@@ -419,14 +419,158 @@ def _restore_numbered_gaps(cands: list[dict], kept: list[dict]) -> list[dict]:
     return sorted(kept + extra, key=lambda c: c["offset"])
 
 
+# ---------------------------------------------------------------- full-text extraction
+#
+# For a paper of ordinary size the whole text is cheap — a 30-question bank is two or
+# three thousand tokens — so the model can simply be handed the document and asked for
+# the questions, with their numbers, grouped. That reads every layout at once: numbered
+# lists, "Q.2 (a)/(b)" slots with OR alternatives, spreadsheet exports, zero-newline
+# PDFs, and shapes nobody has written a regex for yet.
+#
+# The catch is that models PARAPHRASE. Ask for "the questions" and "Define SDLC. Write
+# any three stages of SDLC. [3]" comes back as "Explain SDLC stages" — marks gone,
+# wording changed, and the figure anchoring (which needs each question's position in the
+# original) has nothing to find. So every returned question is checked against the
+# document: text that is not actually in it is dropped, and if the model mangled more
+# than a few the whole reply is discarded and the candidate/heuristic path takes over.
+# The regex machinery is the verifier and the fallback, not dead weight.
+
+_FULL_TEXT_MAX_CHARS = 30_000     # beyond this (answer keys, whole notes) use candidates
+_FULL_TEXT_MIN_KEEP = 0.7         # below this share verified, distrust the whole reply
+_VERIFY_CHARS = 48                # head of each question that must appear in the document
+
+_EXTRACT_SYS = (
+    "TASK: extract_questions\n"
+    "You are given the full text of a question paper or question bank. List EVERY "
+    "question in it, in document order.\n"
+    "Rules:\n"
+    "- Copy each question's text VERBATIM from the document — do not paraphrase, shorten, "
+    "fix typos or drop the marks. Keep marks in the text exactly as written ('[7]', '(5 marks)').\n"
+    "- 'number' is the question's number in the paper (7 for 'Q7', '7.', 'Q.7'). Lettered "
+    "sub-parts under a slot ('Q.2 (a)', '(b)') are SEPARATE questions sharing the slot number; "
+    "keep the '(a)' / '(b)' at the start of their text. Rows in a numbered table count too.\n"
+    "- Alternatives separated by 'OR' are all questions — include both sides.\n"
+    "- NOT questions: instruction lines ('Attempt any one', 'Answer all'), 'OR' lines, "
+    "headings, revision notes, answer text under a question, numbered steps inside an answer.\n"
+    "- A row whose question is only an image, with no text, still counts: give its number "
+    "and the text '[image question]'.\n"
+    "- If you genuinely find no questions, return an empty list.\n\n"
+    'Return STRICT JSON: {"questions": [{"number": 1, "text": "..."}, ...]}'
+)
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _verify_against(raw: str, questions: list[dict]) -> list[dict]:
+    """Keep only questions whose opening genuinely appears in the document, and find where."""
+    norm_raw = _norm(raw)
+    # map normalised positions back to raw offsets (roughly — figure anchoring tolerates it)
+    out, cursor = [], 0
+    for q in questions:
+        text = str(q.get("text", "")).strip()
+        if not text:
+            continue
+        if text.lower().startswith("[image question]"):
+            out.append(_finish(FIGURE_ONLY, cursor, _int_or_none(q.get("number"))))
+            continue
+        head = _norm(re.sub(r"^\(?[a-h]\)\s*", "", text))[:_VERIFY_CHARS]
+        if len(head) < 8:
+            continue
+        pos = norm_raw.find(head, cursor)
+        if pos < 0:
+            pos = norm_raw.find(head)          # out of order, but present
+        if pos < 0:
+            continue                            # paraphrased — not in the document
+        cursor = max(cursor, pos)
+        # scale the normalised position to a raw offset: whitespace collapse keeps order
+        offset = int(pos * (len(raw) / max(len(norm_raw), 1)))
+        out.append(_finish(text, offset, _int_or_none(q.get("number"))))
+    return out
+
+
+def _int_or_none(v) -> int | None:
+    try:
+        n = int(str(v).strip())
+        return n if 0 < n < 1000 else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _ai_extract_full(raw: str) -> list[dict] | None:
+    """Hand the model the whole paper. Returns verified questions, or None to fall back."""
+    if len(raw) > _FULL_TEXT_MAX_CHARS:
+        return None
+    cfg = get_model_config()
+    chain = [cfg.get("extractor") or cfg["router"]] + cfg.get("router_fallbacks", [])
+    for cand in chain:
+        if not providers.provider_available(cand["provider"]):
+            continue
+        try:
+            resp = await providers.chat(
+                cand["provider"], cand["model"],
+                [{"role": "system", "content": _EXTRACT_SYS},
+                 {"role": "user", "content": raw}],
+                json_mode=cand.get("json_mode", False),
+                params=cand.get("params"),
+                models=cand.get("models"),
+            )
+            found = providers.extract_json(resp).get("questions")
+            if not isinstance(found, list) or not found:
+                continue
+            kept = _verify_against(raw, [x for x in found if isinstance(x, dict)])
+            share = len(kept) / len(found)
+            if share < _FULL_TEXT_MIN_KEEP:
+                log.warning("full-text extractor: only %d/%d verified against the document; "
+                            "falling back", len(kept), len(found))
+                return None
+            log.info("full-text extractor: %d questions, %d verified", len(found), len(kept))
+            return kept
+        except Exception as e:
+            log.warning("full-text extractor %s/%s failed: %s", cand["provider"], cand["model"], e)
+    return None
+
+
+# When the regex pass is trusted on its own. Measured live on the real papers: the regex
+# is instant and right on every layout we have; the full-text model takes 60-160 s on
+# the free tier and on a zero-newline PDF produced 12 questions where the regex found
+# 13, gluing the heading into Q1. So the model is the RESCUE for a layout nobody has
+# written a pattern for yet, not the default.
+_PLAUSIBLE_MIN = 3
+_FUSED_CHARS = 900          # one "question" this long is several questions stuck together
+
+
+def looks_plausible(questions: list[dict]) -> bool:
+    """Does the regex result look like a real split, or like a failure we should rescue?"""
+    if len(questions) < _PLAUSIBLE_MIN:
+        return False
+    if any(len(q["text"]) > _FUSED_CHARS for q in questions):
+        return False
+    numbers = [q["number"] for q in questions if q.get("number")]
+    if len(numbers) < 0.8 * len(questions):
+        return False
+    # numbering should mostly climb (sub-parts repeat a slot number; sections restart at 1)
+    climbs = sum(1 for a, b in zip(numbers, numbers[1:]) if b >= a or b == 1)
+    return climbs >= 0.8 * max(len(numbers) - 1, 1)
+
+
 async def extract_questions(raw: str) -> list[dict]:
     cands = _candidates(raw)
-    if not cands:
-        return []
-    kept = await _ai_select(cands)
-    if not kept:
-        return _dedupe(heuristic_extract(raw))
-    return _dedupe(_build(raw, _restore_numbered_gaps(cands, kept)))
+    regex_result = _dedupe(heuristic_extract(raw)) if cands else []
+
+    if looks_plausible(regex_result):
+        # the cheap path: the model only prunes the candidate list (steps-inside-answers)
+        kept = await _ai_select(cands)
+        if kept:
+            return _dedupe(_build(raw, _restore_numbered_gaps(cands, kept)))
+        return regex_result
+
+    # the regex didn't understand this layout — hand the model the whole paper
+    full = await _ai_extract_full(raw)
+    if full:
+        return _dedupe(full)
+    return regex_result
 
 
 def _dedupe(questions: list[dict]) -> list[dict]:

@@ -52,10 +52,10 @@
     "model": "openrouter/free",
     "json_mode": true,
     "params": {
-      "max_tokens": 6000
+      "max_tokens": 8000
     }
   },
-  "_extractor_note": "Splitting is ONE call per upload regardless of document size: the regex finds candidate boundaries, the model only says which are real questions. max_tokens is far higher than the router entry because openrouter/free often lands on a REASONING model, and judging 80+ candidates burns a lot of reasoning tokens before it emits the id list — starve it and you get empty content and a needless fall-through to the next model. Free either way.",
+  "_extractor_note": "Extraction is ONE call per upload: for a paper of ordinary size (<=30K chars) the whole text goes to the model and it returns every question verbatim with its number; each is verified against the document and the reply is discarded if the model paraphrased. Bigger documents fall back to candidate openings. max_tokens is high because the reply IS the question list, and openrouter/free often lands on a reasoning model that spends tokens before it emits JSON. Free either way.",
   "explainer": {
     "provider": "openrouter",
     "model": "openrouter/free",

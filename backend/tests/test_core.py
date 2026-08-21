@@ -517,3 +517,41 @@ def test_a_gtu_exam_paper_splits_into_its_sub_parts():
     assert not any("Revision Focus" in t or "major theory" in t for t in texts)
     # a bulleted "Q4 ..." in the notes is NOT a question header
     assert not any(q["number"] in (4, 9) for q in qs)
+
+
+def test_full_text_extraction_trusts_only_what_is_actually_in_the_document():
+    """The model is handed the whole paper and asked for every question verbatim. Models
+    paraphrase; a paraphrased question has no marks, the wrong wording and no position
+    for figure anchoring. Each returned question is checked against the document — the
+    fakes are dropped, and a reply that is mostly fakes is discarded entirely."""
+    raw = GTU_PAPER
+    good = [{"number": 1, "text": "(a) Define SDLC. Write any three stages of SDLC. [3]"},
+            {"number": 1, "text": "(b) What is Android Architecture? Name any four main layers/components. [3]"},
+            {"number": 2, "text": "(a) Explain Activity Lifecycle with a neat diagram. Also explain any four lifecycle methods. [7]"}]
+    kept = extractor._verify_against(raw, good)
+    assert [q["number"] for q in kept] == [1, 1, 2]
+    assert kept[0]["marks"] == 3 and kept[2]["marks"] == 7
+    assert kept[0]["offset"] < kept[1]["offset"] < kept[2]["offset"], "positions follow the paper"
+
+    paraphrased = [{"number": 1, "text": "(a) Explain the SDLC stages"},      # not in the paper
+                   {"number": 2, "text": "Describe the activity lifecycle"},   # not in the paper
+                   good[1]]
+    kept = extractor._verify_against(raw, paraphrased)
+    assert [q["text"] for q in kept] == [good[1]["text"]], "only the verbatim one survives"
+
+    # an image-only row is accepted on the model's word — there is no text to check
+    kept = extractor._verify_against(raw, [{"number": 7, "text": "[image question]"}])
+    assert kept and kept[0]["text"] == extractor.FIGURE_ONLY and kept[0]["number"] == 7
+
+
+def test_the_model_reads_the_whole_paper_only_when_the_regex_is_lost():
+    """Measured live: the regex is instant and right on every layout we have; the free
+    model takes a minute or three and once did worse. So the model is the rescue for an
+    unknown layout, not the default — and the gate is the regex judging its own result."""
+    assert extractor.looks_plausible(extractor.heuristic_extract(GTU_PAPER))
+    assert extractor.looks_plausible(extractor.heuristic_extract(ZERO_NEWLINE_PDF))
+    # one fused giant "question" is a failure, not a result
+    fused = [extractor._finish("x" * 1200, 0, 1)]
+    assert not extractor.looks_plausible(fused)
+    # two questions is too thin to trust without a second opinion
+    assert not extractor.looks_plausible(extractor.heuristic_extract("1. A?\n2. B?\n"))
